@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Inknaut Labs publisher color, used only for the native (pre-Compose) splash window
+         background - never as a WakeWindow product color. See branding/inknaut/INKNAUT_BRAND_SPEC.md. -->
+    <color name="inknaut_navy">#01172E</color>
+</resources>

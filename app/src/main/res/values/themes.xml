@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Base application theme; Compose owns actual color/typography via WakeWindowTheme. -->
+    <style name="Theme.WakeWindow" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@android:color/white</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+
+    <!-- Native (pre-Compose) splash layer. Background color only - no platform icon is shown,
+         so it never visually competes with the Compose-drawn Inknaut lockup that follows.
+         See ui/splash/SplashScreen.kt for the full two-phase rationale. -->
+    <style name="Theme.WakeWindow.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@android:color/white</item>
+        <item name="windowSplashScreenAnimatedIcon">@android:color/transparent</item>
+        <item name="postSplashScreenTheme">@style/Theme.WakeWindow</item>
+        <item name="android:windowBackground">@android:color/white</item>
+    </style>
+</resources>

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Porthole / window ring -->
+    <path
+        android:pathData="M54,26 A28,28 0 1 1 53.9,26 Z"
+        android:strokeColor="#35BFEF"
+        android:strokeWidth="5"
+        android:fillColor="#00000000" />
+    <!-- Wake line crossing the window -->
+    <path
+        android:pathData="M30,58 C40,50 47,66 54,58 C61,50 68,66 78,58"
+        android:strokeColor="#8EDDD5"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M34,68 C42,62 47,74 54,68 C61,62 66,74 74,68"
+        android:strokeColor="#8EDDD5"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:strokeAlpha="0.7"
+        android:fillColor="#00000000" />
+</vector>

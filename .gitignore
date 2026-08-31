@@ -1,0 +1,15 @@
+*.iml
+.gradle/
+# Reference-only RideCast source archive - not part of this project, never version it.
+/RideCast.zip
+local.properties
+.idea/
+.DS_Store
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+*.keystore
+*.jks
+!debug.keystore
+.kotlin/
