@@ -1,9 +1,11 @@
 package com.wakewindow.app.domain.scoring
 
-import com.wakewindow.app.domain.alert.MarineAlertSeverity
+import com.wakewindow.app.domain.alert.AlertImpactBehavior
+import com.wakewindow.app.domain.alert.AlertSeverityCap
 import com.wakewindow.app.domain.marine.MarineConditions
 import com.wakewindow.app.domain.model.Confidence
 import com.wakewindow.app.domain.model.ConfidenceLevel
+import com.wakewindow.app.domain.observation.WaterEnvironment
 import com.wakewindow.app.domain.route.RouteSample
 import com.wakewindow.app.domain.vessel.VesselProfile
 import kotlin.math.roundToInt
@@ -17,7 +19,12 @@ import kotlin.math.roundToInt
  */
 object MarinePointScorer {
 
-    fun score(sample: RouteSample, conditions: MarineConditions?, vessel: VesselProfile): PointAssessment {
+    fun score(
+        sample: RouteSample,
+        conditions: MarineConditions?,
+        vessel: VesselProfile,
+        environment: WaterEnvironment = WaterEnvironment.UNKNOWN,
+    ): PointAssessment {
         if (conditions == null) {
             return PointAssessment(
                 at = sample.estimatedTime,
@@ -38,30 +45,25 @@ object MarinePointScorer {
             gateCap = gateCap?.let { worstCategory(it, cap) } ?: cap
         }
 
-        // --- Marine alerts: hard gates, evaluated first, most-restrictive wins ---
+        // --- Marine alerts: gated by relevance/impact, not a blanket "any advisory caps the
+        // category" policy - see docs/MARINE_SCORING.md "Alert relevance model." An alert is
+        // always surfaced (a Hazard entry is always added) even when it has no scoring
+        // consequence, so nothing "disappears" silently - see docs/ROADMAP.md Sprint 3.
         for (alert in conditions.marineAlerts) {
             if (!alert.isActiveAt(conditions.timestamp)) continue
-            when (alert.severity) {
-                MarineAlertSeverity.EXTREME -> {
-                    applyGate(BoatingCategory.NO_GO)
-                    hazards += Hazard(HazardType.MARINE_ALERT_EXTREME, "${alert.event} in effect", conditions.timestamp, categoryCap = BoatingCategory.NO_GO)
+            val impact = alert.impact
+            when (impact.behavior) {
+                AlertImpactBehavior.HARD_GATE, AlertImpactBehavior.CATEGORY_CEILING -> {
+                    val cap = impact.categoryCap.toBoatingCategory() ?: BoatingCategory.CAUTION
+                    applyGate(cap)
+                    hazards += Hazard(hazardTypeFor(cap), "${alert.event} in effect", conditions.timestamp, categoryCap = cap)
                 }
-                MarineAlertSeverity.SEVERE -> {
-                    applyGate(BoatingCategory.POOR)
-                    hazards += Hazard(HazardType.MARINE_ALERT_SEVERE, "${alert.event} in effect", conditions.timestamp, categoryCap = BoatingCategory.POOR)
+                AlertImpactBehavior.SCORE_DEDUCTION -> {
+                    deduction += impact.scoreDeduction
+                    hazards += Hazard(HazardType.MARINE_ALERT_ADVISORY, "${alert.event} in effect", conditions.timestamp)
                 }
-                MarineAlertSeverity.ADVISORY -> {
-                    val exempt = alert.vesselSizeExemptApplicable && !vessel.isSmallCraft
-                    if (exempt) {
-                        deduction += 10.0
-                        hazards += Hazard(HazardType.MARINE_ALERT_ADVISORY, "${alert.event} in effect (vessel exceeds small-craft size)", conditions.timestamp)
-                    } else {
-                        applyGate(BoatingCategory.CAUTION)
-                        hazards += Hazard(HazardType.MARINE_ALERT_ADVISORY, "${alert.event} in effect", conditions.timestamp, categoryCap = BoatingCategory.CAUTION)
-                    }
-                }
-                MarineAlertSeverity.WATCH, MarineAlertSeverity.UNKNOWN -> {
-                    deduction += 5.0
+                AlertImpactBehavior.INFORMATIONAL_ONLY -> {
+                    hazards += Hazard(HazardType.MARINE_ALERT_ADVISORY, "${alert.event} in effect (informational)", conditions.timestamp)
                 }
             }
         }
@@ -158,6 +160,17 @@ object MarinePointScorer {
         var category = categoryFromScore(rawScore)
         gateCap?.let { category = worstCategory(category, it) }
 
+        // --- Environment-aware evidence ceiling: only ever pulls EXCELLENT down to GOOD when
+        // evidence this environment normally provides is missing - never raises a category, and
+        // never gates an environment where the missing evidence isn't expected to exist. See
+        // docs/MARINE_SCORING.md "Environment-aware evidence requirements."
+        EvidenceRequirementEvaluator.evaluate(environment, conditions)?.let { (ceiling, reason) ->
+            if (worstCategory(category, ceiling) != category) {
+                hazards += Hazard(HazardType.EVIDENCE_INCOMPLETE, reason, conditions.timestamp, categoryCap = ceiling)
+            }
+            category = worstCategory(category, ceiling)
+        }
+
         val confidence = pointConfidence(conditions, hazards.isNotEmpty())
 
         return PointAssessment(
@@ -215,4 +228,20 @@ object MarinePointScorer {
 
     private fun formatFeet(value: Double): String = "${String.format("%.1f", value)} ft"
     private fun formatNm(value: Double): String = "${String.format("%.1f", value)} NM"
+
+    /** [AlertSeverityCap] is deliberately decoupled from [BoatingCategory] (see
+     * [AlertSeverityCap]'s doc comment) - this is the one place that bridges them back
+     * together, since this scorer already depends on both packages. */
+    private fun AlertSeverityCap.toBoatingCategory(): BoatingCategory? = when (this) {
+        AlertSeverityCap.NO_GO -> BoatingCategory.NO_GO
+        AlertSeverityCap.POOR -> BoatingCategory.POOR
+        AlertSeverityCap.CAUTION -> BoatingCategory.CAUTION
+        AlertSeverityCap.NONE -> null
+    }
+
+    private fun hazardTypeFor(cap: BoatingCategory): HazardType = when (cap) {
+        BoatingCategory.NO_GO -> HazardType.MARINE_ALERT_EXTREME
+        BoatingCategory.POOR -> HazardType.MARINE_ALERT_SEVERE
+        else -> HazardType.MARINE_ALERT_ADVISORY
+    }
 }

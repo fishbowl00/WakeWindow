@@ -33,4 +33,5 @@ interface TideProvider {
 
 interface CurrentProvider {
     suspend fun nearestStation(location: GeoPoint): CurrentStationOutcome
+    suspend fun events(stationId: String, date: LocalDate): CurrentEventsOutcome
 }

@@ -59,6 +59,7 @@ fun WakeWindowNavHost(
                 state = state,
                 onDepartureChange = viewModel::setDepartureTime,
                 onReturnChange = viewModel::setReturnTime,
+                onVesselChange = viewModel::setVessel,
                 onShowConditions = { navController.navigate(WakeWindowDestinations.ASSESSMENT) },
                 onBack = { navController.popBackStack() },
             )

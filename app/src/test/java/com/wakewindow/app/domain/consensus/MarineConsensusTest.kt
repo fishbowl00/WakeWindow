@@ -78,6 +78,11 @@ class MarineConsensusTest {
             id = "a1", event = "Small Craft Advisory", headline = null,
             severity = com.wakewindow.app.domain.alert.MarineAlertSeverity.ADVISORY,
             effective = null, expires = null, areaDescription = null,
+            impact = com.wakewindow.app.domain.alert.MarineAlertImpact(
+                com.wakewindow.app.domain.alert.AlertImpactCategory.MARINE_NAVIGATION,
+                com.wakewindow.app.domain.alert.AlertImpactBehavior.CATEGORY_CEILING,
+                com.wakewindow.app.domain.alert.AlertSeverityCap.CAUTION,
+            ),
         )
         val r1 = reading("NWS").copy(marineAlerts = listOf(alert1))
         val r2 = reading("Open-Meteo")

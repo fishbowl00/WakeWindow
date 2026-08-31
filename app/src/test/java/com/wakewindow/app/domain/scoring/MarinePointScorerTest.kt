@@ -1,5 +1,6 @@
 package com.wakewindow.app.domain.scoring
 
+import com.wakewindow.app.data.remote.nws.NwsMapper
 import com.wakewindow.app.domain.alert.MarineAlert
 import com.wakewindow.app.domain.alert.MarineAlertSeverity
 import com.wakewindow.app.domain.marine.MarineConditions
@@ -57,6 +58,7 @@ class MarinePointScorerTest {
         expires = at.plusSeconds(3600),
         areaDescription = null,
         vesselSizeExemptApplicable = vesselSizeExemptApplicable,
+        impact = NwsMapper.classify(event).impact,
     )
 
     @Test
@@ -151,16 +153,17 @@ class MarinePointScorerTest {
     }
 
     @Test
-    fun `small craft advisory is only a deduction for a vessel that is not small craft`() {
+    fun `small craft advisory caps a large vessel at CAUTION too - the size exemption is gone`() {
         val largeVessel = defaultVessel.copy(isSmallCraft = false)
         val result = MarinePointScorer.score(
             defaultSample,
             conditions(windKts = 5.0, waveFt = 0.5, alerts = listOf(alert(MarineAlertSeverity.ADVISORY, "Small Craft Advisory", vesselSizeExemptApplicable = true))),
             largeVessel,
         )
-        // Calm underlying conditions plus a 10-point deduction should still clear CAUTION's
-        // floor - the advisory must not be gated for a vessel that isn't "small craft."
-        assertTrue("expected better than CAUTION, got ${result.category}", result.category.severityRank < BoatingCategory.CAUTION.severityRank)
+        // Sprint 3 reversal: an active Small Craft Advisory always applies its category
+        // ceiling, regardless of vessel size - see MarineAlert.vesselSizeExemptApplicable's
+        // doc comment and docs/MARINE_SCORING.md "Alert relevance model."
+        assertEquals(BoatingCategory.CAUTION, result.category)
     }
 
     @Test
@@ -191,5 +194,39 @@ class MarinePointScorerTest {
         val result = MarinePointScorer.score(defaultSample, generalOnly, defaultVessel)
         assertNull(generalOnly.waveHeightFt)
         assertTrue(result.confidence.reasons.isNotEmpty())
+    }
+
+    @Test
+    fun `a coastal environment with no wave data cannot reach EXCELLENT even with perfect wind and visibility`() {
+        val result = MarinePointScorer.score(
+            defaultSample,
+            conditions(windKts = 5.0, gustKts = 6.0, visibilityNm = 10.0, thunderstormPercent = 0, precipPercent = 0),
+            defaultVessel,
+            environment = com.wakewindow.app.domain.observation.WaterEnvironment.NEARSHORE,
+        )
+        assertEquals(BoatingCategory.GOOD, result.category)
+        assertTrue(result.hazards.any { it.type == HazardType.EVIDENCE_INCOMPLETE })
+    }
+
+    @Test
+    fun `an inland environment with no wave data still reaches EXCELLENT - there is no wave data to be missing`() {
+        val result = MarinePointScorer.score(
+            defaultSample,
+            conditions(windKts = 5.0, gustKts = 6.0, visibilityNm = 10.0, thunderstormPercent = 0, precipPercent = 0),
+            defaultVessel,
+            environment = com.wakewindow.app.domain.observation.WaterEnvironment.INLAND,
+        )
+        assertEquals(BoatingCategory.EXCELLENT, result.category)
+        assertTrue(result.hazards.none { it.type == HazardType.EVIDENCE_INCOMPLETE })
+    }
+
+    @Test
+    fun `an unclassified environment with no wave data still reaches EXCELLENT - never gate on a guess`() {
+        val result = MarinePointScorer.score(
+            defaultSample,
+            conditions(windKts = 5.0, gustKts = 6.0, visibilityNm = 10.0, thunderstormPercent = 0, precipPercent = 0),
+            defaultVessel,
+        )
+        assertEquals(BoatingCategory.EXCELLENT, result.category)
     }
 }

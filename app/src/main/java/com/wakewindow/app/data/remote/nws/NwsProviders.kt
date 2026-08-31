@@ -5,6 +5,7 @@ import com.wakewindow.app.domain.alert.MarineAlertProvider
 import com.wakewindow.app.domain.marine.MarineForecastProvider
 import com.wakewindow.app.domain.model.GeoPoint
 import com.wakewindow.app.domain.model.SourceReference
+import com.wakewindow.app.domain.observation.WaterPointTypeProvider
 import com.wakewindow.app.domain.weather.ForecastOutcome
 import com.wakewindow.app.domain.weather.GeneralWeatherProvider
 import retrofit2.HttpException
@@ -25,20 +26,38 @@ import java.util.concurrent.ConcurrentHashMap
  */
 class NwsProviders(
     private val service: NwsService = NwsConfig.service(),
-) : GeneralWeatherProvider, MarineForecastProvider, MarineAlertProvider {
+) : GeneralWeatherProvider, MarineForecastProvider, MarineAlertProvider, WaterPointTypeProvider {
 
     override val providerName: String = "National Weather Service"
 
     private val gridUrlCache = ConcurrentHashMap<String, String>()
     private val zoneIdCache = ConcurrentHashMap<String, ZoneId>()
+    private val pointTypeCache = ConcurrentHashMap<String, String>()
 
     private suspend fun resolvePoints(location: GeoPoint): NwsPointsProperties {
         val key = coordKey(location)
         val points = service.points(coordPath(location)).properties
         points.forecastGridData?.let { gridUrlCache[key] = it }
         points.timeZone?.let { runCatching { ZoneId.of(it) }.getOrNull()?.let { zone -> zoneIdCache[key] = zone } }
+        points.type?.let { pointTypeCache[key] = it }
         return points
     }
+
+    /** NWS's own `"land"`/`"marine"` classification for a coordinate - the first, cheapest
+     * signal [com.wakewindow.app.domain.observation.WaterEnvironmentClassifier] uses. Null only
+     * if NWS has no coverage at all for the point. See docs/STATION_REPRESENTATIVENESS.md. */
+    suspend fun resolvePointType(location: GeoPoint): String? {
+        val key = coordKey(location)
+        pointTypeCache[key]?.let { return it }
+        return try {
+            resolvePoints(location)
+            pointTypeCache[key]
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    override suspend fun pointType(location: GeoPoint): String? = resolvePointType(location)
 
     private suspend fun resolveGridDataUrl(location: GeoPoint): String {
         val key = coordKey(location)

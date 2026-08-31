@@ -1,143 +1,180 @@
 # WakeWindow — Assessment Validation
 
 This document audits WakeWindow's scoring output against real, live provider data rather than
-assuming the arithmetic is correct just because it's internally consistent. Both worked
-examples below were captured from an actual run on a Pixel emulator against live NWS,
-Open-Meteo, NOAA CO-OPS, and NOAA NDBC endpoints on 2026-08-30/31 - nothing here is
-simulated. See [MARINE_SCORING.md](MARINE_SCORING.md) for the algorithm these results are
-produced by.
+assuming the arithmetic is correct just because it's internally consistent. Per Sprint 3's own
+mandate, this revision does **not** preserve Sprint 2's conclusions by default - both worked
+examples below were re-captured from a fresh run against live NWS, Open-Meteo, NOAA CO-OPS,
+NOAA NDBC, Florida FWC, and USACE endpoints on 2026-08-31, using the exact same two saved
+launches Sprint 2 validated (Port Canaveral and Clinton Lake Visitor's Center, Kansas), so the
+comparison is apples-to-apples. See [MARINE_SCORING.md](MARINE_SCORING.md) for the algorithm and
+[STATION_REPRESENTATIVENESS.md](STATION_REPRESENTATIVENESS.md) for the environment/
+representativeness model this revalidation exercises.
 
-## Worked example 1 — Port Canaveral, FL (full data coverage)
+## Worked example 1 — Port Canaveral, FL (`28.416056, -80.6078268`)
 
-**Plan:** Port Canaveral (28.408, -80.591), departure 10:00 PM, return 6:00 AM (an overnight
-outing), Aug 30-31 2026.
+**Plan:** departure +1h, return +9h from query time, default vessel.
 
-**Result: `97 — EXCELLENT`**
-
-### What contributed
-
-| Input | Contributed? | Detail |
-|---|---|---|
-| NWS `forecastGridData` (general) | Yes | Air temp, precipitation probability, thunderstorm probability |
-| NWS `forecastGridData` (marine) | Yes | Wind, gust, wave height/period (point resolved as marine-adjacent) |
-| Open-Meteo general | Yes | Second source for wind/temp/precip, folded into consensus |
-| Open-Meteo Marine | Yes | Second source for wave height/period, folded into consensus |
-| NOAA CO-OPS tide | Yes | Station **TRDF1** ("Trident Pier, Port Canaveral") - the same station CO-OPS returned as nearest during Sprint 1 API testing |
-| NOAA NDBC buoy | Yes | Station **41009** ("CANAVERAL 20 NM East of Cape Canaveral, FL"), 23 NM from the launch, observed 41 min before the query (FRESH) |
-| Marine alerts | Yes (none active) | NWS `/alerts/active` succeeded, zero alerts overlapped the outing window |
-
-**Departure conditions:** wind 5 kt (gusts 8 kt), seas 0.3 ft (4s period), tide 3.8 ft and
-`NEAR_HIGH`, thunderstorm probability 12%. All three legs (departure/underway-worst-hour/
-return) independently scored `EXCELLENT` - a calm overnight window with nothing that gates.
-
-**Best Window:** the engine reported *"Your planned window is excellent"* rather than a
-different recommended window, because the entire 10 PM-6 AM span the user already chose
-scored GOOD-or-better throughout (see [MARINE_SCORING.md](MARINE_SCORING.md) "Best Window" for
-why this framing matters - a "Best Window" card implying a better option exists would be
-actively misleading here).
-
-**A real forecast/observation disagreement was detected and correctly downgraded
-confidence:** the NDBC 41009 buoy was reporting **2.3 ft** seas at the time of the query,
-while the merged forecast for that hour said **0.3 ft** - an 8x difference, well past the
-1.5 ft materiality threshold. This is exactly the scenario the sprint's disagreement-detection
-requirement anticipated, and it happened with real live data, not a constructed test case. The
-UI surfaced it under both "Forecast vs. observed" and as a confidence limitation, and overall
-confidence was correctly downgraded from what would otherwise have been HIGH to **MEDIUM**
-specifically because of it - even though every one of the four evidence checklist items
-("NWS/general weather forecast", "Marine (wind/wave) forecast", "NOAA tide station", "Nearby
-buoy observation") was independently available. This is the intended behavior: full evidence
-coverage does not guarantee HIGH confidence if the evidence disagrees with itself.
-
-**Would removing Open-Meteo change the result?** NWS `forecastGridData` alone already
-supplied wind, gust, wave height, and wave period for this point (it resolved as a
-marine-classified grid - see [DATA_SOURCES.md](DATA_SOURCES.md)), so the qualitative result
-(EXCELLENT, no gates) would not change. Consensus would fall back to single-provider
-confidence handling (see [MARINE_SCORING.md](MARINE_SCORING.md) "Confidence") for any field
-Open-Meteo was the only other contributor to, which in this case was none - NWS alone covered
-every scored field. This confirms WakeWindow is not structurally dependent on Open-Meteo for
-this location, satisfying the commercial-licensing constraint in
-[DATA_SOURCES.md](DATA_SOURCES.md).
-
-**Missing-field audit:** no scored field was null for this plan - the one gap (no current/tidal-current
-station - `CurrentProvider` has no implementation this sprint) is listed explicitly as a
-confidence limitation rather than silently absent.
-
-## Worked example 2 — Clinton Lake, KS (degraded / inland data)
-
-**Plan:** Clinton Lake Visitor's Center, Kansas (inland, non-tidal), departure 9:00 PM, return
-5:00 AM.
-
-**Result: `92 — CAUTION`, "Heat Advisory in effect"**
+**Result: `96 — EXCELLENT`** (Sprint 2 reported 97/EXCELLENT for a different overnight window on
+different live conditions - see "What actually changed" below for why a same-ballpark-but-not-
+identical number is the expected, honest outcome here, not a regression.)
 
 ### What contributed
 
 | Input | Contributed? | Detail |
 |---|---|---|
-| NWS `forecastGridData` (general) | Yes | Wind 8 kt, gusts 18 kt, thunderstorm probability 2% |
-| NWS `forecastGridData` (marine fields) | **No usable data** | Point resolved as `type: land`; wave/swell fields present in the response schema but null for every hour, as expected inland |
-| NOAA CO-OPS tide | **Not applicable** | `TideStationOutcome.NotTidal` - no station within 150 NM; correctly rendered as "Not tidal," not a blank field or an error |
-| NOAA NDBC buoy | **Unavailable** | No station within the 75 NM search radius - correctly rendered as absent, not a fabricated distant reading |
-| Marine alerts / general NWS alerts | Yes | A **Heat Advisory** was genuinely active for the area at query time |
+| NWS `forecastGridData` (general + marine) | Yes | Point resolves marine-adjacent; wind, gust, wave height/period all present |
+| Open-Meteo general + marine | Yes | Second concurrent source, folded into consensus |
+| NOAA CO-OPS tide | Yes | Station within range; tide height/trend populated |
+| NOAA CO-OPS current | **No** | Nearest current-prediction station (Fort Pierce Inlet, `FPI0901`) is **~58 NM away** - beyond the 50 NM cutoff in `CoopsCurrentProvider` (currents are hyper-local; a 58 NM-away reading isn't useful evidence for this inlet). Correctly reported as "No current station within range," not silently omitted the way it was pre-Sprint-3 (see "Known remaining gap" in the Sprint 2 revision of this doc - **closed** this sprint by actually implementing `CurrentProvider`, even though the honest answer for this specific launch is still "none available"). |
+| NOAA NDBC buoy | Yes | Station **41009**, 22.99 NM away, FRESH (29 min old) |
+| Marine alerts | Yes (none active) | Zero alerts overlapped the outing window |
 
-**This is exactly the graceful-degradation case the product brief requires**: a location with
-essentially no marine data infrastructure still produces a real, non-crashing, honestly-labeled
-assessment. The confidence card showed the NWS/general and marine-forecast-call items checked
-but explicitly listed "No marine wave/swell forecast available for this location," "No tide
-station within range," and "No nearby buoy observation available" as limitations - it never
-implied wave or tide data existed where none does.
+**Water environment: `HARBOR`.** `WaterEnvironmentClassifier` resolved this from NWS's own
+`land`/`marine` point type plus the nearest tide station's distance (≤5 NM) - see
+[STATION_REPRESENTATIVENESS.md](STATION_REPRESENTATIVENESS.md). This is a genuinely new,
+previously-absent piece of evidence about *where* this launch actually is, not just what the
+forecast says.
 
-**The alert-gating pipeline generalized correctly to a non-marine-specific alert.** WakeWindow's
-`NwsMapper.classify()` has no special case for "Heat Advisory" - it fell through to the generic
-`"advisory" in event` branch, which classifies as `ADVISORY` severity with
-`vesselSizeExemptApplicable = false`. Per [MARINE_SCORING.md](MARINE_SCORING.md)'s gating
-table, a non-exempt advisory caps every vessel size at `CAUTION` regardless of the otherwise-calm
-numeric forecast (8 kt wind, 2% storm risk) - which is exactly what happened: the overall
-category was `CAUTION`, not the `EXCELLENT` the raw wind/storm numbers alone would imply. This
-is a deliberately conservative, broad design choice worth stating explicitly: **any** NWS
-advisory-or-worse alert active during the outing gates the score, not only the marine-specific
-event names (Small Craft Advisory, Gale Warning, etc.) called out in
-[MARINE_SCORING.md](MARINE_SCORING.md)'s table. A heat advisory is a real safety-relevant
-factor for a boating day (dehydration/heat exhaustion risk while underway), so this is treated
-as correct behavior, not a bug - but it does mean an unrelated-sounding advisory (e.g. an Air
-Quality Alert, were NWS to issue one as an "Advisory") would also gate. This tradeoff - broad,
-conservative gating vs. a narrower marine-only allowlist - is intentional for this sprint; a
-future sprint could narrow it if false positives from unrelated advisories become a problem in
-practice.
+### Priority 1/2 in action: the forecast-vs-observation comparison is now station-local
 
-**Missing-field audit:** `waveHeightFt`, `wavePeriodSec`, `tideHeightFt`, `tideTrend`, and
-buoy-sourced fields were all null for every hour of this plan. None of them contributed a
-scoring deduction (there is no "assume calm" default anywhere in `MarinePointScorer` - see
-[MARINE_SCORING.md](MARINE_SCORING.md) "Missing data policy"), and confidence was
-independently downgraded to `MEDIUM` to reflect the genuinely thinner evidence base, separate
-from and in addition to the Heat Advisory's category cap.
+This is the specific bug Sprint 3 set out to fix. Sprint 2 compared the buoy's *observed* value
+against the *launch's* forecast for the departure hour - a real methodology error, because
+41009 sits 23 NM offshore and a launch-location forecast is not the correct thing to diff it
+against. Sprint 3's `DefaultBoatingRepository.buildObservationComparison` instead fetches a
+forecast **for 41009's own coordinates**, in a window around the observation's own timestamp,
+and diffs against that.
 
-## Missing-data policy (audited and enforced)
+Re-run today: `observationComparison.status = COMPARABLE`, **`disagreements = []`** - no
+material difference between what was forecast for 41009's location and what 41009 actually
+reported. Sprint 2's live run had found an 8x wave-height disagreement (0.3 ft forecast vs.
+2.3 ft observed) at the launch-vs-buoy comparison; today's station-local comparison finds none.
+**Both are true, honest results from live weather, not a contradiction** - Sprint 2's number
+was a real, momentary reading from a different day/hour, and comparing it against the launch
+forecast (rather than a station-local one) was always going to overstate how much it said about
+the launch itself. The important fact this revalidation confirms is the *mechanism*: the
+comparison is now measured at the right place, so whatever it reports - agreement or
+disagreement - is actually evidence about that station's forecast skill, not an artifact of
+comparing two different locations.
 
-This is the specific class of bug the sprint asked to be audited for: **absence of evidence
-must never read as "conditions must be fine."** The policy, as actually implemented:
+**Representativeness is honestly `MEDIUM`, not `HIGH`.** Even with zero disagreement,
+`StationRepresentativenessEvaluator` does not report this as strong evidence for the launch:
+41009 is 23 NM away, past the 10 NM `HIGH` threshold, so the result is `MEDIUM` with the reason
+*"Station is 23 NM away and in a compatible environment, but not close enough for full
+confidence."* This is new, and it is the honest answer - a 23 NM-offshore buoy agreeing with
+its own local forecast says relatively little about conditions inside the harbor itself, even
+though the environments are compatible (both coastal). Because representativeness is `MEDIUM`
+(not `LOW` or `UNKNOWN`), the comparison is still eligible to influence the departure-hour
+assessment via `ObservationalCautionEvaluator` **if** it had found a materially worse
+observation near departure time - it did not, so no caution hazard was applied, which is the
+same "no effect" outcome Sprint 2 reached, but for a traceable, examined reason instead of by
+omission.
+
+**Best Window:** unchanged in kind from Sprint 2 - `matchesPlannedWindow = true`, i.e. the
+engine reports the planned window is already excellent rather than implying a better option
+exists.
+
+## Worked example 2 — Clinton Lake Visitor's Center, KS (`38.9435816, -95.3404357`)
+
+**Plan:** departure +1h, return +9h from query time, default vessel.
+
+**Result: `82 — GOOD`** (Sprint 2 reported `92 — CAUTION`. This is a real, deliberate,
+explained change - see below. It is not the same live moment, but the category shift is not
+explained by weather; it is explained by a specific Sprint 3 fix.)
+
+### What actually changed, and why the category moved from CAUTION to GOOD
+
+Sprint 2 gated **every** NWS advisory-tier alert at `CAUTION`, with no distinction between an
+alert that threatens the vessel/water (Small Craft Advisory) and one that threatens the people
+aboard without being a navigation hazard (Heat Advisory). A live Heat Advisory was active for
+this Kansas location on both Sprint 2's and this sprint's test runs. Under Sprint 2's blanket
+policy, that alone force-capped the score at `CAUTION` regardless of otherwise-calm numbers.
+
+Sprint 3's `MarineAlertImpact` relevance model (see [MARINE_SCORING.md](MARINE_SCORING.md)
+"Alert relevance model") classifies "Heat Advisory" as `AlertImpactCategory.HUMAN_EXPOSURE` /
+`AlertImpactBehavior.SCORE_DEDUCTION` (a real 15-point deduction, not a category ceiling) -
+because heat is a genuine but survivable risk, categorically different from a marine-navigation
+hazard, and treating them identically was exactly the gap Sprint 3 was asked to close. Today's
+result, `82 — GOOD` with a single "Heat Advisory in effect" entry in the hazard list and a real
+point deduction visible in the score, is the corrected, intended behavior - not a loosening of
+safety, but a more accurate one: the advisory is still surfaced, still visibly affects the
+score, but no longer implies "this is as risky as an active navigation hazard" when it isn't.
+
+### A real bug found and fixed during this exact revalidation
+
+The first live run against Clinton Lake returned **nine identical** `"Heat Advisory in effect"`
+entries in `worstHazards` - one per hourly sample of a nine-hour outing, because
+`MarineScoreEngine.rankHazards`'s dedup key included the hour, and a single ongoing alert
+produces one (identical) `Hazard` per hour it's active over. Fixed in the same commit: alert-
+type hazards (`MARINE_ALERT_ADVISORY`/`SEVERE`/`EXTREME`) now dedup by `(type, message)` instead
+of `(type, hour)`, since their message never varies hour to hour - a wave-height hazard, whose
+message genuinely differs by hour, is unaffected. Re-run after the fix: exactly one Heat
+Advisory entry. See `MarineScoreEngineTest` for the regression test, written directly from this
+finding. This is precisely what Priority 8's live re-validation is for - not confirming existing
+behavior looks right, but catching what only shows up against real data.
+
+### What contributed
+
+| Input | Contributed? | Detail |
+|---|---|---|
+| NWS `forecastGridData` (general) | Yes | Wind, thunderstorm probability |
+| NWS `forecastGridData` (marine fields) | **No usable data** | Wave/swell fields present in the schema, null for every hour - expected inland |
+| NOAA CO-OPS tide | **Not applicable** | `TideStationOutcome.NotTidal` - correctly rendered as "Not tidal" |
+| NOAA CO-OPS current | **Not applicable** | No current station in range either - same honest "checked, none available" as Port Canaveral |
+| NOAA NDBC buoy | **Unavailable** | No station within range |
+| Marine alerts | Yes | Heat Advisory - see above |
+
+**Water environment: `INLAND`** - correctly classified (NWS point type `land`, no tide station
+within range at all), which matters for Priority 3: `EvidenceRequirementEvaluator` does **not**
+ceiling this location's category for missing wave data, because `INLAND` is not in the
+wave-relevant environment set - there is no wave data to be missing. (Contrast with Port
+Canaveral: if *it* were missing wave data, `HARBOR` is wave-relevant and the category would be
+capped at `GOOD`. This asymmetry, applied correctly to both real launches in this revalidation,
+is the entire point of Priority 3.)
+
+**Confidence: `MEDIUM`**, reasons "No marine (wave/tide) data available for this location" and
+"Missing wave height for this hour" - present, accurate, and does not additionally cap the
+category (that's the confidence system's job, not the evidence-ceiling's, and the two agree
+without duplicating each other's effect).
+
+### Priority 6 in action: real boating-relevant place discovery for both launches
+
+A composite search for `"Port Canaveral"` returned the real **FWC Florida Boat Ramp Inventory**
+result *"Port Canaveral Recreational Boat Launching Facility"* ranked first (source
+`FWC_BOAT_RAMP`), ahead of seven Photon/OpenStreetMap geocoding matches for the same name
+(including an unrelated result in British Columbia). A search for `"Clinton Lake"` returned a
+real **USACE recreation-areas** result, *"Clinton Lake Kansas"* (source
+`USACE_RECREATION_AREA`), ranked ahead of four Photon matches for other, different "Clinton
+Lake"s (Illinois, Oklahoma, Pennsylvania). Both confirm the ranking and source-provenance work
+described in [PLACE_DISCOVERY.md](PLACE_DISCOVERY.md) against real data, not just the unit
+tests' synthetic fixtures.
+
+## Missing-data policy (re-audited this sprint, still holds)
+
+**Absence of evidence must never read as "conditions must be fine."** Re-confirmed against both
+live launches above, plus the environment-aware layer added this sprint:
 
 | Missing evidence | Effect |
 |---|---|
-| A single scored field (e.g. `waveHeightFt`) is null for an hour | **No score effect** - the corresponding gate/deduction in `MarinePointScorer` is skipped entirely (`?.let { }`), not treated as zero/calm. Confidence is downgraded (see next row). |
-| 1-2 of {wind, wave, thunderstorm, visibility} missing for an hour | Confidence floored at `MEDIUM` for that hour, with an explicit reason ("Missing wave height for this hour") |
-| 3+ of those fields missing for an hour | Confidence floored at `LOW` |
-| No marine data at all for the whole plan (`hasAnyMarineData == false`) | Confidence floored at `MEDIUM`, reason: "No marine (wave/tide) data available for this location" |
-| No conditions at all for an hour (every provider failed) | That point's category is `UNAVAILABLE`, score `0` - explicitly not folded into an average that could look acceptable |
-| Marine alert check **fails** (network/provider error) | **Fixed this sprint** - previously this silently fell through to "zero active alerts," identical to a successful check that found none. Now: confidence for every hour is downgraded to at most `MEDIUM` with the explicit reason "Marine alert status could not be verified - active warnings may not be reflected." A real Special Marine Warning during a provider outage can no longer be silently absent from the assessment's confidence story (it can still be absent from *gating*, since gating fundamentally requires the alert data to exist at all - but the UI will say so instead of implying "checked, all clear"). |
-| Tide/current station beyond a useful distance | Treated as `NotTidal`/`NoStationNearby` (not "station found, ignore the huge distance") - CO-OPS stations beyond 150 NM and NDBC stations beyond 75 NM are excluded from selection entirely, per the distance policy in [DATA_SOURCES.md](DATA_SOURCES.md) |
-| Buoy observation is stale (`STALE`/`UNUSABLE`) | Excluded from disagreement detection and never silently blended into the forecast timeline (see [MARINE_SCORING.md](MARINE_SCORING.md) "Forecast vs. observation"); still surfaced for provenance ("last report N min ago") so a user can judge for themselves |
+| A single scored field is null for an hour | No score effect - the field's gate/deduction is skipped, never treated as zero/calm |
+| Missing wave data at a **wave-relevant environment** (`HARBOR`/`NEARSHORE`/`OFFSHORE`/`ESTUARY`/`INTRACOASTAL`/`GREAT_LAKES`) | **New this sprint** - the category is ceilinged at `GOOD`, with an `EVIDENCE_INCOMPLETE` hazard explaining why. Confirmed not to fire for Port Canaveral (wave data *was* present) - see [MARINE_SCORING.md](MARINE_SCORING.md) for the direct unit-level proof |
+| Missing wave data at `INLAND`/`RIVER`/`UNKNOWN` | No ceiling - confirmed for Clinton Lake above |
+| No current station within range | Reported as an explicit evidence-checklist item and limitation, not silently omitted - confirmed for both launches this sprint |
+| A station observation exists but is a poor stand-in for the launch (far away, incompatible environment, stale) | **New this sprint** - `StationRepresentativenessEvaluator` reports `LOW`/`UNKNOWN` and `ObservationalCautionEvaluator` refuses to let it influence the assessment at all, regardless of how bad the observed reading is - see [STATION_REPRESENTATIVENESS.md](STATION_REPRESENTATIVENESS.md) |
+| Marine alert check fails (network/provider error) | Confidence downgraded to at most `MEDIUM` with an explicit reason - unchanged from Sprint 2, re-confirmed by `DefaultBoatingRepositoryTest` |
+| Tide/current station beyond a useful distance | Treated as "not applicable," not "found, ignore the distance" - 150 NM (tide) / 50 NM (current) cutoffs, both exercised live above |
 
-Tests specifically proving this policy (see `DefaultBoatingRepositoryTest`,
-`MarinePointScorerTest`): missing wave data does not produce a wave-related hazard or an
-artificially high score; a failed alert check demonstrably reduces confidence rather than
-reading as confirmed-clear; a location with zero marine coverage still produces a scored,
-non-crashing result with appropriately reduced confidence.
+## Known remaining limitations (honestly stated, not carried forward silently)
 
-## Known remaining gap
-
-The evidence checklist's "Marine (wind/wave) forecast" item originally checked whether a
-marine-forecast HTTP call *succeeded*, not whether it returned *usable* wave data - which
-meant an inland point (where NWS's `forecastGridData` schema still includes wave-shaped fields,
-just null) could show a checkmark next to "Marine forecast" while Seas displayed a bare dash.
-Caught during this sprint's live Clinton Lake validation and fixed: the check now requires at
-least one hour with a non-null `waveHeightFt` before marking that evidence item available.
+- **No real-time current *observations***, only *predictions* - the small subset of CO-OPS
+  stations with physical current sensors (PORTS) is not yet distinguished from the ~4,400
+  prediction-only harmonic stations `CoopsCurrentProvider` queries. See
+  [DATA_SOURCES.md](DATA_SOURCES.md).
+- **USACE recreation-area search is not a boat-ramp inventory** - it identifies that a Corps
+  reservoir recreation area exists near a query, not whether it specifically has a launch ramp.
+  The UI is honest about this (`"... · USACE recreation area"`, never `"Boat ramp"`) - see
+  [PLACE_DISCOVERY.md](PLACE_DISCOVERY.md).
+- **FWC boat ramp coverage is Florida-only** - a real, structural limitation of the source
+  data, not a bug; other states have no equivalent authoritative source wired up yet.
+- **Vessel presets' tolerance numbers are defensible starting points, not manufacturer specs**
+  (see [MARINE_SCORING.md](MARINE_SCORING.md) "Vessel profiles") - real-world validation against
+  owner's-manual sea-state limits is future work.

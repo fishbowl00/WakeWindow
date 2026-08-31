@@ -28,13 +28,19 @@ data class MarineAlert(
     val expires: Instant?,
     val areaDescription: String?,
     /**
-     * Whether a vessel that isn't "small craft" (see [com.wakewindow.app.domain.vessel.VesselProfile.isSmallCraft])
-     * is exempt from this alert acting as a hard category gate. True for Small Craft
-     * Advisory (the alert is written for small vessels specifically); false for hazards that
-     * apply regardless of vessel size, like Dense Fog Advisory. See docs/MARINE_SCORING.md
-     * "Marine alert gating."
+     * **Sprint 3 reversal - kept only for source compatibility, no longer consulted by
+     * scoring.** This used to let a vessel above `VesselProfile.isSmallCraft` skip a Small
+     * Craft Advisory gate entirely. Per docs/MARINE_SCORING.md "Alert relevance model," an
+     * active Small Craft Advisory is now always surfaced and always applies its category
+     * ceiling, regardless of vessel size - vessel profile may reasonably affect assessment
+     * severity in the future, but must never hide or ignore an active advisory outright.
      */
     val vesselSizeExemptApplicable: Boolean = false,
+    /** What kind of consequence this alert has and how it should affect scoring - see
+     * [MarineAlertImpact] and docs/MARINE_SCORING.md "Alert relevance model." This is what
+     * [com.wakewindow.app.domain.scoring.MarinePointScorer] actually gates on; [severity] is
+     * kept for simpler display/legacy purposes. */
+    val impact: MarineAlertImpact,
 ) {
     /** Unknown start/end times are treated as already-active and open-ended - fail-unsafe,
      * matching RideCast's own hazard-window handling. */

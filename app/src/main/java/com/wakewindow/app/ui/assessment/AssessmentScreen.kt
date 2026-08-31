@@ -39,8 +39,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.wakewindow.app.domain.model.ConfidenceLevel
+import com.wakewindow.app.domain.observation.ComparisonStatus
 import com.wakewindow.app.domain.observation.MarineDisagreement
+import com.wakewindow.app.domain.observation.ObservationForecastComparison
 import com.wakewindow.app.domain.observation.ObservationFreshness
+import com.wakewindow.app.domain.observation.RepresentativenessLevel
 import com.wakewindow.app.domain.observation.SelectedMarineStation
 import com.wakewindow.app.domain.scoring.BestWindow
 import com.wakewindow.app.domain.scoring.BoatingWindowAssessment
@@ -120,7 +123,7 @@ private fun AssessmentContent(assessment: BoatingWindowAssessment, zoneId: ZoneI
         if (assessment.disagreements.isNotEmpty()) {
             item { DisagreementsCard(assessment.disagreements) }
         }
-        assessment.nearestObservationStation?.let { station -> item { ObservationStationCard(station) } }
+        assessment.nearestObservationStation?.let { station -> item { ObservationStationCard(station, assessment.observationComparison) } }
         item { ConfidenceCard(assessment) }
         item { SafetyFooter() }
     }
@@ -315,8 +318,14 @@ private fun DisagreementsCard(disagreements: List<MarineDisagreement>) {
     }
 }
 
+/**
+ * Shows not just what the station observed, but how much that observation should be trusted
+ * as evidence for *this* launch - see docs/STATION_REPRESENTATIVENESS.md. A fresh, nearby
+ * reading and a fresh, 40 NM offshore reading are not the same kind of evidence, and this card
+ * is where that distinction becomes visible rather than implicit.
+ */
 @Composable
-private fun ObservationStationCard(station: SelectedMarineStation) {
+private fun ObservationStationCard(station: SelectedMarineStation, comparison: ObservationForecastComparison?) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text("Nearby observation", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -327,6 +336,21 @@ private fun ObservationStationCard(station: SelectedMarineStation) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            comparison?.let {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    it.representativeness.level.label(),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = it.representativeness.level.toColor(),
+                    fontWeight = FontWeight.SemiBold,
+                )
+                it.representativeness.reasons.forEach { reason ->
+                    Text("• $reason", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 2.dp))
+                }
+                it.status.label()?.let { statusMessage ->
+                    Text(statusMessage, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 2.dp))
+                }
+            }
         }
     }
 }
@@ -336,6 +360,29 @@ private fun ObservationFreshness.label(): String = when (this) {
     ObservationFreshness.AGING -> "aging"
     ObservationFreshness.STALE -> "stale"
     ObservationFreshness.UNUSABLE -> "too old to use"
+}
+
+private fun RepresentativenessLevel.label(): String = when (this) {
+    RepresentativenessLevel.HIGH -> "Strong evidence for this launch"
+    RepresentativenessLevel.MEDIUM -> "Moderate evidence for this launch"
+    RepresentativenessLevel.LOW -> "Weak evidence for this launch"
+    RepresentativenessLevel.UNKNOWN -> "Evidence strength unknown"
+}
+
+private fun RepresentativenessLevel.toColor(): Color = when (this) {
+    RepresentativenessLevel.HIGH -> com.wakewindow.app.ui.theme.CategoryColors.Good
+    RepresentativenessLevel.MEDIUM -> com.wakewindow.app.ui.theme.CategoryColors.Caution
+    RepresentativenessLevel.LOW -> com.wakewindow.app.ui.theme.CategoryColors.Poor
+    RepresentativenessLevel.UNKNOWN -> Color.Unspecified
+}
+
+/** Only [ComparisonStatus.NO_FORECAST_AT_STATION] and [ComparisonStatus.TIME_MISALIGNED] need
+ * an explanation - [ComparisonStatus.COMPARABLE] speaks for itself via any disagreements shown
+ * elsewhere, and [ComparisonStatus.NOT_ATTEMPTED] never reaches this card (no station at all). */
+private fun ComparisonStatus.label(): String? = when (this) {
+    ComparisonStatus.NO_FORECAST_AT_STATION -> "No forecast could be resolved for the station's own location - comparison not possible"
+    ComparisonStatus.TIME_MISALIGNED -> "No forecast hour close enough to the observation time to compare"
+    ComparisonStatus.COMPARABLE, ComparisonStatus.NOT_ATTEMPTED -> null
 }
 
 @Composable

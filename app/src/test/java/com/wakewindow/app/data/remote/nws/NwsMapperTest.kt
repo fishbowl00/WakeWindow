@@ -117,7 +117,115 @@ class NwsMapperTest {
             id = "x", event = "Special Marine Warning", headline = null,
             severity = com.wakewindow.app.domain.alert.MarineAlertSeverity.EXTREME,
             effective = null, expires = null, areaDescription = null,
+            impact = NwsMapper.classify("Special Marine Warning").impact,
         )
         assertTrue(alert.isActiveAt(Instant.now()))
+    }
+
+    // --- Alert relevance model (docs/MARINE_SCORING.md "Alert relevance model") - Sprint 3
+    // replaces a blanket "any advisory/warning caps the category" policy with a per-event-type
+    // table of consequences. Each case below is a real event type this app must classify. ---
+
+    @Test
+    fun `hurricane and tropical storm warnings are a hard gate to NO_GO`() {
+        for (event in listOf("Hurricane Warning", "Tropical Storm Warning")) {
+            val impact = NwsMapper.classify(event).impact
+            assertEquals(event, com.wakewindow.app.domain.alert.AlertImpactBehavior.HARD_GATE, impact.behavior)
+            assertEquals(event, com.wakewindow.app.domain.alert.AlertSeverityCap.NO_GO, impact.categoryCap)
+        }
+    }
+
+    @Test
+    fun `special marine warning and severe convective warnings are a hard gate to NO_GO`() {
+        for (event in listOf("Special Marine Warning", "Severe Thunderstorm Warning", "Tornado Warning")) {
+            val impact = NwsMapper.classify(event).impact
+            assertEquals(event, com.wakewindow.app.domain.alert.AlertImpactBehavior.HARD_GATE, impact.behavior)
+            assertEquals(event, com.wakewindow.app.domain.alert.AlertSeverityCap.NO_GO, impact.categoryCap)
+        }
+    }
+
+    @Test
+    fun `gale and storm warnings ceiling the category at POOR`() {
+        for (event in listOf("Gale Warning", "Storm Warning")) {
+            val impact = NwsMapper.classify(event).impact
+            assertEquals(event, com.wakewindow.app.domain.alert.AlertImpactBehavior.CATEGORY_CEILING, impact.behavior)
+            assertEquals(event, com.wakewindow.app.domain.alert.AlertSeverityCap.POOR, impact.categoryCap)
+        }
+    }
+
+    @Test
+    fun `small craft advisory always ceilings at CAUTION - the impact model carries no vessel-size exemption`() {
+        val impact = NwsMapper.classify("Small Craft Advisory").impact
+        assertEquals(com.wakewindow.app.domain.alert.AlertImpactBehavior.CATEGORY_CEILING, impact.behavior)
+        assertEquals(com.wakewindow.app.domain.alert.AlertSeverityCap.CAUTION, impact.categoryCap)
+        assertEquals(com.wakewindow.app.domain.alert.AlertImpactCategory.MARINE_NAVIGATION, impact.category)
+    }
+
+    @Test
+    fun `dense fog advisory ceilings at CAUTION - dangerous to any vessel size`() {
+        val impact = NwsMapper.classify("Dense Fog Advisory").impact
+        assertEquals(com.wakewindow.app.domain.alert.AlertImpactBehavior.CATEGORY_CEILING, impact.behavior)
+        assertEquals(com.wakewindow.app.domain.alert.AlertSeverityCap.CAUTION, impact.categoryCap)
+    }
+
+    @Test
+    fun `an active coastal flood advisory or warning is a COASTAL_ACCESS ceiling`() {
+        val impact = NwsMapper.classify("Coastal Flood Advisory").impact
+        assertEquals(com.wakewindow.app.domain.alert.AlertImpactCategory.COASTAL_ACCESS, impact.category)
+        assertEquals(com.wakewindow.app.domain.alert.AlertImpactBehavior.CATEGORY_CEILING, impact.behavior)
+    }
+
+    @Test
+    fun `a coastal flood WATCH is not yet a CATEGORY_CEILING - it hasn't happened yet`() {
+        val impact = NwsMapper.classify("Coastal Flood Watch").impact
+        assertEquals(com.wakewindow.app.domain.alert.AlertImpactBehavior.SCORE_DEDUCTION, impact.behavior)
+    }
+
+    @Test
+    fun `excessive heat warning is a HUMAN_EXPOSURE ceiling, distinct from a marine-navigation hazard`() {
+        val impact = NwsMapper.classify("Excessive Heat Warning").impact
+        assertEquals(com.wakewindow.app.domain.alert.AlertImpactCategory.HUMAN_EXPOSURE, impact.category)
+        assertEquals(com.wakewindow.app.domain.alert.AlertImpactBehavior.CATEGORY_CEILING, impact.behavior)
+    }
+
+    @Test
+    fun `a plain heat advisory is only a deduction, not a category ceiling like Sprint 2's blanket policy`() {
+        val impact = NwsMapper.classify("Heat Advisory").impact
+        assertEquals(com.wakewindow.app.domain.alert.AlertImpactBehavior.SCORE_DEDUCTION, impact.behavior)
+        assertTrue(impact.scoreDeduction > 0.0)
+    }
+
+    @Test
+    fun `wind chill, freeze, frost, and cold weather advisories are HUMAN_EXPOSURE deductions`() {
+        for (event in listOf("Wind Chill Advisory", "Freeze Warning", "Frost Advisory", "Cold Weather Advisory")) {
+            val impact = NwsMapper.classify(event).impact
+            assertEquals(event, com.wakewindow.app.domain.alert.AlertImpactCategory.HUMAN_EXPOSURE, impact.category)
+            assertEquals(event, com.wakewindow.app.domain.alert.AlertImpactBehavior.SCORE_DEDUCTION, impact.behavior)
+        }
+    }
+
+    @Test
+    fun `air quality alerts are informational only - no defensible boating-safety consequence`() {
+        val impact = NwsMapper.classify("Air Quality Alert").impact
+        assertEquals(com.wakewindow.app.domain.alert.AlertImpactBehavior.INFORMATIONAL_ONLY, impact.behavior)
+    }
+
+    @Test
+    fun `an unrecognized warning-tier alert still applies a moderate ceiling, never silently dropped`() {
+        val impact = NwsMapper.classify("Some Future Marine Warning").impact
+        assertEquals(com.wakewindow.app.domain.alert.AlertImpactCategory.UNKNOWN, impact.category)
+        assertEquals(com.wakewindow.app.domain.alert.AlertImpactBehavior.CATEGORY_CEILING, impact.behavior)
+    }
+
+    @Test
+    fun `an unrecognized advisory-tier alert is a deduction, not a full ceiling`() {
+        val impact = NwsMapper.classify("Some Future Advisory").impact
+        assertEquals(com.wakewindow.app.domain.alert.AlertImpactBehavior.SCORE_DEDUCTION, impact.behavior)
+    }
+
+    @Test
+    fun `a completely unrecognized event is surfaced as informational, never silently dropped`() {
+        val impact = NwsMapper.classify("Some Unrelated Statement").impact
+        assertEquals(com.wakewindow.app.domain.alert.AlertImpactBehavior.INFORMATIONAL_ONLY, impact.behavior)
     }
 }

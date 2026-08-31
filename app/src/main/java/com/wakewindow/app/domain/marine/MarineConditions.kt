@@ -4,6 +4,7 @@ import com.wakewindow.app.domain.alert.MarineAlert
 import com.wakewindow.app.domain.model.Confidence
 import com.wakewindow.app.domain.model.GeoPoint
 import com.wakewindow.app.domain.model.SourceReference
+import com.wakewindow.app.domain.tide.CurrentEvent
 import com.wakewindow.app.domain.tide.TideEvent
 import com.wakewindow.app.domain.tide.TideTrend
 import java.time.Instant
@@ -45,6 +46,9 @@ data class MarineConditions(
 
     val currentSpeedKts: Double? = null,
     val currentDirectionDeg: Double? = null,
+    /** The next predicted flood/ebb max or slack turn after [timestamp] - see [CurrentEvent].
+     * Null whenever no current station applies here at all, exactly like [nextHighTide]. */
+    val nextCurrentEvent: CurrentEvent? = null,
 
     val marineAlerts: List<MarineAlert> = emptyList(),
 

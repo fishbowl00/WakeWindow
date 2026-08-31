@@ -1,5 +1,6 @@
 package com.wakewindow.app.domain.scoring
 
+import com.wakewindow.app.data.remote.nws.NwsMapper
 import com.wakewindow.app.domain.alert.MarineAlert
 import com.wakewindow.app.domain.alert.MarineAlertSeverity
 import com.wakewindow.app.domain.marine.MarineConditions
@@ -53,6 +54,7 @@ class MarineScoreEngineTest {
                 effective = at.minusSeconds(600),
                 expires = at.plusSeconds(3600),
                 areaDescription = null,
+                impact = NwsMapper.classify("Special Marine Warning").impact,
             ),
         ),
         source = source(at),
@@ -155,5 +157,35 @@ class MarineScoreEngineTest {
         val assessment = MarineScoreEngine.assess(samples, { null }, vessel)
 
         assertEquals(BoatingCategory.UNAVAILABLE, assessment.overallAssessment.category)
+    }
+
+    @Test
+    fun `an alert active across every sampled hour appears once in worstHazards, not once per hour`() {
+        // Regression test for a real bug found during Sprint 3's live Clinton Lake
+        // re-validation: a nine-hour outing under one continuous Heat Advisory produced nine
+        // identical "Heat Advisory in effect" entries in worstHazards, because the old dedup
+        // key included the hour - see docs/ASSESSMENT_VALIDATION.md.
+        val departure = Instant.parse("2026-08-30T12:00:00Z")
+        val returnTime = Instant.parse("2026-08-30T20:00:00Z")
+        val hours = (0..8).map { departure.plusSeconds(it * 3600L) }
+        val heatAdvisory = MarineAlert(
+            id = "heat-advisory", event = "Heat Advisory", headline = null, severity = MarineAlertSeverity.ADVISORY,
+            effective = departure.minusSeconds(3600), expires = returnTime.plusSeconds(3600), areaDescription = null,
+            impact = NwsMapper.classify("Heat Advisory").impact,
+        )
+        val conditionsByHour = hours.associateWith { hour -> calm(hour).copy(marineAlerts = listOf(heatAdvisory)) }
+        val samples = hours.mapIndexed { index, hour ->
+            val role = when (hour) {
+                departure -> RouteSampleRole.DEPARTURE
+                returnTime -> RouteSampleRole.RETURN
+                else -> RouteSampleRole.UNDERWAY
+            }
+            RouteSample(location, role, index / 8.0, hour)
+        }
+
+        val assessment = MarineScoreEngine.assess(samples, { conditionsByHour[it.estimatedTime] }, vessel)
+
+        val heatHazards = assessment.worstHazards.filter { it.message.contains("Heat Advisory") }
+        assertEquals(1, heatHazards.size)
     }
 }

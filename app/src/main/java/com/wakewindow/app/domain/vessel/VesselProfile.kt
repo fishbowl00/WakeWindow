@@ -55,5 +55,67 @@ data class VesselProfile(
             visibilityToleranceNm = 1.0,
             isSmallCraft = true,
         )
+
+        /**
+         * The first user-selectable vessel presets - see docs/MARINE_SCORING.md "Vessel
+         * profiles." Tolerances are deliberately coarse, defensible starting points (not a
+         * manufacturer spec sheet): a PWC's low freeboard and lack of a cabin make it far more
+         * wind/wave-sensitive than its size alone suggests, while a sailboat's tolerance
+         * reflects motoring/day-sailing in developing weather, not a bluewater passage. Every
+         * preset must still be traceable to a real, explainable [BoatingCategory] gate in
+         * [com.wakewindow.app.domain.scoring.MarinePointScorer] - none of these numbers bypass
+         * that. Never overrides an active marine warning gate - see [MarineAlert].
+         */
+        fun presets(): List<VesselProfile> = listOf(
+            default().copy(name = "Small recreational boat", vesselType = VesselType.BOWRIDER, lengthFt = 18.0),
+            VesselProfile(
+                name = "Center console",
+                vesselType = VesselType.SMALL_CENTER_CONSOLE,
+                lengthFt = 24.0,
+                propulsionType = PropulsionType.OUTBOARD,
+                windToleranceKts = 22.0,
+                gustToleranceKts = 28.0,
+                waveToleranceFt = 3.5,
+                thunderstormTolerancePercent = 40,
+                visibilityToleranceNm = 1.0,
+                isSmallCraft = true,
+            ),
+            VesselProfile(
+                name = "Pontoon",
+                vesselType = VesselType.PONTOON,
+                lengthFt = 22.0,
+                propulsionType = PropulsionType.OUTBOARD,
+                windToleranceKts = 15.0,
+                gustToleranceKts = 18.0,
+                waveToleranceFt = 1.5,
+                thunderstormTolerancePercent = 30,
+                visibilityToleranceNm = 1.0,
+                isSmallCraft = true,
+            ),
+            VesselProfile(
+                name = "PWC (jet ski)",
+                vesselType = VesselType.PWC,
+                lengthFt = 11.0,
+                propulsionType = PropulsionType.JET,
+                windToleranceKts = 15.0,
+                gustToleranceKts = 18.0,
+                waveToleranceFt = 1.5,
+                thunderstormTolerancePercent = 25,
+                visibilityToleranceNm = 1.0,
+                isSmallCraft = true,
+            ),
+            VesselProfile(
+                name = "Sailboat",
+                vesselType = VesselType.SAILBOAT,
+                lengthFt = 30.0,
+                propulsionType = PropulsionType.SAIL,
+                windToleranceKts = 25.0,
+                gustToleranceKts = 32.0,
+                waveToleranceFt = 4.0,
+                thunderstormTolerancePercent = 40,
+                visibilityToleranceNm = 1.0,
+                isSmallCraft = false,
+            ),
+        )
     }
 }

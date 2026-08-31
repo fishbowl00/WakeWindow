@@ -10,6 +10,14 @@ enum class HazardType {
     WAVE_HEIGHT,
     GUST,
     VISIBILITY,
+    /** A fresh, representative station observation reporting materially worse conditions than
+     * the forecast for that same station - see docs/MARINE_SCORING.md "Observation influence
+     * on assessment." */
+    OBSERVED_CONDITIONS,
+    /** Critical evidence this environment normally provides (e.g. wave height at a coastal
+     * launch) simply isn't available - see docs/MARINE_SCORING.md "Environment-aware evidence
+     * requirements." */
+    EVIDENCE_INCOMPLETE,
 }
 
 /**

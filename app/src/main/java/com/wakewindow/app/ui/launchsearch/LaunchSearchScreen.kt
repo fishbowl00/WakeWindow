@@ -33,6 +33,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.wakewindow.app.domain.place.MarinePlaceCandidate
+import com.wakewindow.app.domain.place.MarinePlaceType
+import com.wakewindow.app.domain.place.PlaceSourceType
 import com.wakewindow.app.ui.WakeWindowUiState
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -89,6 +91,7 @@ fun LaunchSearchScreen(
                 else -> LazyColumn(contentPadding = PaddingValues(bottom = 16.dp)) {
                     items(state.searchResults) { candidate ->
                         ListItem(
+                            overlineContent = { Text(candidate.placeTypeLabel(), style = MaterialTheme.typography.labelSmall) },
                             headlineContent = { Text(candidate.name) },
                             supportingContent = candidate.address?.let { { Text(it) } },
                             leadingContent = { Icon(Icons.Filled.LocationOn, contentDescription = null) },
@@ -102,4 +105,30 @@ fun LaunchSearchScreen(
             }
         }
     }
+}
+
+/**
+ * Honest, source-aware labeling - see docs/PLACE_DISCOVERY.md "Ranking" and Sprint 3's mandate
+ * to show place type "without inferring facility data." A boat ramp identified by FWC's own
+ * inventory is a verified fact; the same label guessed from a generic geocoder's map tag is
+ * not, and this line says so rather than presenting both the same way.
+ */
+private fun MarinePlaceCandidate.placeTypeLabel(): String {
+    val type = guessedType.label()
+    return when (sourceType) {
+        PlaceSourceType.FWC_BOAT_RAMP -> "$type · FWC verified"
+        PlaceSourceType.USACE_RECREATION_AREA -> "$type · USACE recreation area"
+        PlaceSourceType.GEOCODING -> "$type · unverified"
+    }
+}
+
+private fun MarinePlaceType.label(): String = when (this) {
+    MarinePlaceType.BOAT_RAMP -> "Boat ramp"
+    MarinePlaceType.MARINA -> "Marina"
+    MarinePlaceType.HARBOR -> "Harbor"
+    MarinePlaceType.PORT -> "Port"
+    MarinePlaceType.DOCK -> "Dock"
+    MarinePlaceType.YACHT_CLUB -> "Yacht club"
+    MarinePlaceType.ANCHORAGE -> "Anchorage"
+    MarinePlaceType.OTHER -> "Place"
 }

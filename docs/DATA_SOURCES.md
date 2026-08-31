@@ -119,10 +119,13 @@ point, including marine-specific products (Small Craft Advisory, Special Marine 
 Gale Warning) when they apply — but also non-marine products (Heat Advisory, Dense Fog
 Advisory, Severe Thunderstorm Warning, etc.) whenever they're active for that location. This
 is the source for `MarineAlertProvider`. WakeWindow's own classification
-(`NwsMapper.classify()`) deliberately does not filter to a marine-only allowlist — see
-[MARINE_SCORING.md](MARINE_SCORING.md) "Gates" for why an unrecognized advisory-tier alert
-still gates the assessment rather than being silently ignored, confirmed live with a real
-Heat Advisory during Sprint 2 testing (see [ASSESSMENT_VALIDATION.md](ASSESSMENT_VALIDATION.md)).
+(`NwsMapper.classify()`) deliberately does not filter to a marine-only allowlist, but as of
+Sprint 3 it also no longer treats every advisory-tier alert identically — see
+[MARINE_SCORING.md](MARINE_SCORING.md) "Alert relevance model" for the full per-event-type
+table (a Heat Advisory is a real, visible score deduction, not the same kind of category-
+capping consequence as a Small Craft Advisory), confirmed live with a real Heat Advisory
+during both Sprint 2 and Sprint 3 testing (see
+[ASSESSMENT_VALIDATION.md](ASSESSMENT_VALIDATION.md)).
 
 ## NOAA NDBC — National Data Buoy Center
 
@@ -215,6 +218,55 @@ return something not meaningfully representative of the query point.
 
 **License/attribution:** U.S. government public data.
 
+### Current predictions — implemented Sprint 3, verified live 2026-08-30
+
+`GET /mdapi/prod/webapi/stations.json?type=currentpredictions` returns ~4,400 current-station
+entries. **Most are harmonic (subordinate) stations** (`"type": "H"` in the metadata) with no
+physical sensor - they predict the moments current *turns*, not a continuous speed curve. A
+station with multiple depth bins appears once per bin (same `id`, different `currbin`) -
+`CoopsCurrentProvider` dedups by keeping each id's first-listed bin, which is empirically
+CO-OPS' own default for a bin-less predictions query (verified against station `FPI0901`: the
+first-listed bin, 9, is exactly what a query with no `bin` parameter returns).
+
+`GET /api/prod/datagetter?product=currents_predictions&station={id}&interval=MAX_SLACK` returns
+the flood-max/ebb-max/slack cycle for the day, e.g.:
+
+```json
+{"current_predictions":{"units":"feet, knots","cp":[
+  {"Type":"flood","meanFloodDir":258,"Bin":"9","meanEbbDir":81,"Time":"2026-08-30 00:56","Depth":"6","Velocity_Major":3.14},
+  {"Type":"slack","meanFloodDir":258,"Bin":"9","meanEbbDir":81,"Time":"2026-08-30 04:05","Depth":"6","Velocity_Major":0},
+  {"Type":"ebb","meanFloodDir":258,"Bin":"9","meanEbbDir":81,"Time":"2026-08-30 06:51","Depth":"6","Velocity_Major":-3.51}
+]}}
+```
+
+`Velocity_Major` is **signed** (positive = flood, negative = ebb, ~0 = slack) - the domain
+`CurrentEvent.speedKts` is always a magnitude, with direction instead coming from whichever of
+`meanFloodDir`/`meanEbbDir` applies, and `null` at slack (direction is genuinely undefined at
+zero velocity). Requesting a continuous interval (e.g. `interval=h`, or no interval at all) on
+a harmonic station does **not** return a dense time series - it silently returns the same
+MAX_SLACK-style event data, confirming these stations don't support anything finer. `interval=
+MAX_SLACK` is requested explicitly rather than relying on that default, so the behavior doesn't
+depend on an undocumented fallback.
+
+`CurrentTimeline` (mirroring `TideTimeline`) interpolates a continuous per-hour speed/direction
+from these discrete turns using the same cosine-bell approximation `TideTimeline` uses between
+tide extremes - a reasonable approximation, not a claim of precision the underlying prediction
+doesn't have.
+
+**Currents are hyper-local in a way tide height is not.** `CoopsCurrentProvider` enforces a
+50 NM cutoff (vs. 150 NM for tide) - a channel/inlet current reading 50+ NM away says nothing
+useful about the current running at a different inlet. Confirmed live: the nearest CO-OPS
+current station to Port Canaveral (`28.416056, -80.6078268`) is `FPI0901` (Fort Pierce Inlet),
+**~58 NM away** - beyond the cutoff, so Port Canaveral correctly reports "No current station
+within range" rather than presenting a Fort Pierce reading as if it applied locally. See
+[ASSESSMENT_VALIDATION.md](ASSESSMENT_VALIDATION.md).
+
+**Known limitation, stated honestly:** this implements current *predictions* only. A small
+subset of CO-OPS stations (PORTS-equipped) also publish real-time current *observations* via a
+separate `product=currents`; `CoopsCurrentProvider` does not yet distinguish or query these -
+a scoped follow-up, not attempted this sprint given the much larger prediction-station coverage
+already gained.
+
 ## Open-Meteo (`api.open-meteo.com`, `marine-api.open-meteo.com`)
 
 **Role during development:** convenient supplementary source for general forecast fields
@@ -250,11 +302,48 @@ Open-Meteo.com") required; see the commercial constraint above for production us
 
 No single free API supplies both "where is this marina" and "what's its ramp fee, VHF
 channel, and gate hours." This is kept as two architecturally separate concerns:
-`MarinePlaceProvider` (Photon, discovery only — name/address/coordinates/guessed type) and
+`MarinePlaceProvider` (discovery — name/address/coordinates/type, with honest provenance) and
 `MarineFacilityInfo` (a provenance-tracked record with an explicit `FacilityAvailability`
 state — `AVAILABLE`/`NOT_AVAILABLE`/`UNKNOWN`/`NOT_APPLICABLE` — per amenity field, so "we
 don't know" is never conflated with "no"). See [PRODUCT.md](PRODUCT.md) "Facility data
 states" and [ARCHITECTURE.md](ARCHITECTURE.md) for the full model.
+
+**Discovery gained two real, boating-relevant sources this sprint** — the Florida FWC boat ramp
+inventory and USACE recreation-area data, fanned out and ranked ahead of Photon by
+`CompositeMarinePlaceProvider`. See [PLACE_DISCOVERY.md](PLACE_DISCOVERY.md) for the full
+design, ranking, and live-validated results.
+
+### Florida FWC Boat Ramp Inventory (`gis.myfwc.com`)
+
+**Verified live 2026-08-30.** ArcGIS REST `MapServer` layer 4
+(`Open_Data/FWC_Florida_Boat_Ramp_Inventory`). The layer's own `Shape` geometry is in a
+Florida-specific projected CRS (`wkid 102967`) — `Latitude`/`Longitude` **attribute fields** are
+used directly instead (`returnGeometry=false`), avoiding any reprojection. Fields used:
+`RampName`, `City`, `County`, `Latitude`, `Longitude`, `WaterBodyName`, `Status`, `RampType`,
+`AccessType`, `Street1`. `Status` values observed live include `"Open for Business"` and
+`"Temporarily Closed"` — a real, current fact about ramp availability that `FwcMapper` filters
+on (see [PLACE_DISCOVERY.md](PLACE_DISCOVERY.md)) rather than surfacing indiscriminately.
+Florida-only coverage — a structural fact about the source, not a bug.
+
+**License/attribution:** U.S./Florida state government public data, funded in part by a
+U.S. Fish and Wildlife Service Federal Aid grant per the layer's own metadata. No published
+rate limit encountered.
+
+### USACE recreation areas (`services7.arcgis.com`)
+
+**Verified live 2026-08-30.** A hosted ArcGIS FeatureServer
+(`n1YM8pTrFmm7L4hs/.../usace_recreation_areas/FeatureServer/0`), `esriGeometryPolygon` — land
+parcels around Corps reservoirs, described by USACE's own metadata as "Land associated with
+Corps reservoirs used for recreational purposes." `returnCentroid=true` asks ArcGIS to compute
+a representative point per polygon server-side. Fields used: `FEATURENAME` (often null in
+practice), `RECPROJECTSITENAME` (reliably populated, e.g. `"TABLE ROCK LAKE"`),
+`MANAGINGAGENCY`, `DISTRICT`. **This is not a boat-ramp inventory** — no field asserts a ramp
+exists at a given parcel, confirmed by searching live data for ramp/launch-named features and
+finding none; see [PLACE_DISCOVERY.md](PLACE_DISCOVERY.md) for why `UsaceMapper` never claims
+`MarinePlaceType.BOAT_RAMP` from it.
+
+**License/attribution:** U.S. government public data (owner `usace_crrel_als` on ArcGIS
+Online). No published rate limit encountered.
 
 **No facility-intelligence provider ships this sprint, deliberately.** `MarineFacilityInfoProvider`
 is a defined interface with zero implementations — per the sprint brief, an uncontrolled web
@@ -262,12 +351,14 @@ scraper against arbitrary marina/harbor websites is explicitly out of scope (fra
 murky, unmaintainable at any scale). `LaunchInfoScreen` is built to render `MarineFacilityInfo`'s
 all-`UNKNOWN`/all-null default state honestly (confirmed live — see
 [ASSESSMENT_VALIDATION.md](ASSESSMENT_VALIDATION.md)), so wiring in a real source later is
-additive, not a UI rewrite. Plausible future controlled sources, not yet evaluated in depth:
-official port/harbor-authority sites (`SourceType.OFFICIAL_PORT`), state boating-access agency
-datasets (`SourceType.STATE_AGENCY`), USACE lake/reservoir facility data
-(`SourceType.USACE`) for Corps-managed lakes, and marina-operator-published data where a
-marina explicitly opts in (`SourceType.MARINA_OPERATOR`). Each would need its own licensing/ToS
-review before integration — none is assumed usable yet.
+additive, not a UI rewrite. FWC's own boat ramp data actually includes richer per-ramp fields
+(`RampType`, `AccessType`, `TotalLanes`, `Amenities`, `ContactPhone`) that are currently
+discarded down to a `MarinePlaceCandidate` — a concrete, scoped opportunity for a future sprint
+(`SourceType.STATE_AGENCY`) rather than a general-purpose scraper. Other plausible future
+sources, not yet evaluated: official port/harbor-authority sites (`SourceType.OFFICIAL_PORT`)
+and marina-operator-published data where a marina explicitly opts in
+(`SourceType.MARINA_OPERATOR`). Each would need its own licensing/ToS review before integration
+— none is assumed usable yet.
 
 ## Provider licensing summary
 
@@ -275,7 +366,9 @@ review before integration — none is assumed usable yet.
 |---|---|---|---|---|---|
 | NWS (`api.weather.gov`) | General + marine forecast, alerts | Yes | No (courtesy `User-Agent` requested, not legally required) | Soft — descriptive `User-Agent` requested, no published hard quota | Yes |
 | NOAA NDBC | Buoy/station observations | Yes | No | No published quota; the `latest_obs.txt` snapshot is fetched and cached client-side (10 min TTL) specifically to avoid hammering it | Yes |
-| NOAA CO-OPS | Tide predictions, station metadata | Yes | No | No published quota for this volume of use | Yes |
+| NOAA CO-OPS | Tide + current predictions, station metadata | Yes | No | No published quota for this volume of use | Yes |
+| Florida FWC | Boat ramp inventory (place discovery) | Yes | No | No published quota encountered | Yes — but Florida-only coverage, a structural not a licensing limit |
+| USACE | Recreation-area land parcels (place discovery) | Yes | No | No published quota encountered | Yes |
 | Photon (`photon.komoot.io`) | Place search/geocoding | No — public demo instance of an open-source project, not government data | Attribution to OpenStreetMap contributors is good practice | Yes — a shared public demo instance with no documented SLA; RideCast's own docs flag this same instance as a P0 risk before any public beta (see [RIDECAST_REFERENCE_AUDIT.md](RIDECAST_REFERENCE_AUDIT.md)) | **No** — a shared free demo instance is not an appropriate production dependency at any real user volume; see "Scale and Provider Risk" in [ROADMAP.md](ROADMAP.md) |
 | Open-Meteo (general + Marine) | Supplementary general/marine forecast | No — a commercial product with a free tier | Yes, on the free tier (CC BY 4.0) | Yes, documented free-tier volume limits | **No** — free tier is documented as non-commercial/development use; see below |
 

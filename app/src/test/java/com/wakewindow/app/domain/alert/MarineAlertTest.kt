@@ -11,6 +11,7 @@ class MarineAlertTest {
     private fun alert(effective: Instant?, expires: Instant?) = MarineAlert(
         id = "x", event = "Small Craft Advisory", headline = null,
         severity = MarineAlertSeverity.ADVISORY, effective = effective, expires = expires, areaDescription = null,
+        impact = MarineAlertImpact(AlertImpactCategory.MARINE_NAVIGATION, AlertImpactBehavior.CATEGORY_CEILING, AlertSeverityCap.CAUTION),
     )
 
     @Test

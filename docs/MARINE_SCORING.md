@@ -62,34 +62,65 @@ wave.
 These exist because averaging is the wrong operation for them — a few points off an
 otherwise-sunny score is not how a Gale Warning should be represented.
 
-| Gate | Trigger | Cap | Vessel-size exempt? |
-|---|---|---|---|
-| Hurricane/Tropical Storm Warning, Special Marine Warning, or Severe Thunderstorm Warning in effect | NWS alert feed, classified `EXTREME` | `NO_GO` | No |
-| Gale Warning / Storm Warning in effect | NWS alert feed, classified `SEVERE` | `POOR` | No — a gale is dangerous to any recreational vessel |
-| Small Craft Advisory in effect | NWS alert feed, classified `ADVISORY` | `CAUTION` | **Yes** — a vessel with `VesselProfile.isSmallCraft = false` takes a 10-point deduction instead of a gate; the advisory is written for small vessels specifically |
-| Dense Fog Advisory, or any other NWS advisory-tier alert (including non-marine ones — see below) | NWS alert feed, classified `ADVISORY` | `CAUTION` | No — fog, and most other advisory-tier hazards, are not a small-vessel-only problem |
-| Any NWS Watch (Severe Thunderstorm Watch, Tornado Watch, etc.) | NWS alert feed, classified `WATCH` | 5-point deduction only, not a gate | n/a |
-| Thunderstorm probability ≥ vessel's `thunderstormTolerance` | Forecast | ≥ tolerance → `CAUTION`; ≥ tolerance + 30 pts → `POOR`; ≥ 90% → `NO_GO` | n/a |
-| Wave height ≥ 1.0× vessel's `waveTolerance` | Forecast/observation | `CAUTION` at 1.0×, `POOR` at 1.25×, `NO_GO` at 1.5× | n/a |
-| Gust ≥ vessel's `gustTolerance` | Forecast/observation | `CAUTION` at tolerance, `POOR` at tolerance + 10 kt | n/a |
-| Visibility below vessel's `visibilityTolerance` | Forecast/observation | `CAUTION` at tolerance, `POOR` below half of it | n/a |
+| Gate | Trigger | Cap |
+|---|---|---|
+| Thunderstorm probability ≥ vessel's `thunderstormTolerance` | Forecast | ≥ tolerance → `CAUTION`; ≥ tolerance + 30 pts → `POOR`; ≥ 90% → `NO_GO` |
+| Wave height ≥ 1.0× vessel's `waveTolerance` | Forecast/observation | `CAUTION` at 1.0×, `POOR` at 1.25×, `NO_GO` at 1.5× |
+| Gust ≥ vessel's `gustTolerance` | Forecast/observation | `CAUTION` at tolerance, `POOR` at tolerance + 10 kt |
+| Visibility below vessel's `visibilityTolerance` | Forecast/observation | `CAUTION` at tolerance, `POOR` below half of it |
 
 A gate is a floor on the *category*, not a fixed penalty on the *score* — the brief is
 explicit that a severe marine warning "should not merely subtract 15 points from an
-otherwise pleasant day."
+otherwise pleasant day." Marine alerts are gated separately, by relevance rather than a
+blanket policy — see "Alert relevance model" below, which replaces the Sprint 2 table that
+used to live in this section.
 
-**Classification is deliberately broad, not a marine-only allowlist.** `NwsMapper.classify()`
-recognizes the specific marine event names above by substring match, but *any* NWS alert whose
-event text contains "advisory" or "warning" and isn't otherwise recognized still falls through
-to the generic `ADVISORY`/`SEVERE` tier rather than being ignored — confirmed live during
-Sprint 2 validation, where a genuine **Heat Advisory** active over an inland Kansas test
-location correctly capped that assessment at `CAUTION` even though heat isn't a "marine" hazard
-by name (see [ASSESSMENT_VALIDATION.md](ASSESSMENT_VALIDATION.md)). This is intentional:
-extreme heat is a real safety factor on the water (dehydration, heat exhaustion), and the
-product's posture throughout is to gate conservatively on real NWS-issued hazards rather than
-maintain a narrow marine-specific allowlist that could silently miss something relevant. A
-future sprint could narrow this if unrelated advisories prove to be false positives in
-practice.
+## Alert relevance model
+
+**Sprint 2's policy — any NWS advisory-or-worse alert caps the category at `CAUTION`,
+regardless of what kind of threat it actually represents — was a real gap.** Treating a Heat
+Advisory identically to a Small Craft Advisory conflates two different kinds of consequence: one
+threatens the people aboard without being a navigation hazard, the other threatens safe
+operation of the vessel itself. Sprint 3 replaces the blanket policy with
+`MarineAlertImpact` (`domain/alert/MarineAlertImpact.kt`), classified per event by
+`NwsMapper.classify()`:
+
+| Event | Impact category | Behavior | Effect |
+|---|---|---|---|
+| Hurricane/Tropical Storm Warning, Special Marine Warning, Severe Thunderstorm Warning, Tornado Warning | `SEVERE_WEATHER` / `MARINE_NAVIGATION` | `HARD_GATE` | `NO_GO` |
+| Gale Warning, Storm Warning | `MARINE_NAVIGATION` | `CATEGORY_CEILING` | `POOR` |
+| Small Craft Advisory | `MARINE_NAVIGATION` | `CATEGORY_CEILING` | `CAUTION` — **always, for every vessel size** (see "The vessel-size exemption is gone" below) |
+| Dense Fog Advisory | `MARINE_NAVIGATION` | `CATEGORY_CEILING` | `CAUTION` |
+| Coastal Flood Advisory/Warning (not a Watch) | `COASTAL_ACCESS` | `CATEGORY_CEILING` | `CAUTION` — affects the launch/return infrastructure, not conditions on the water |
+| Excessive Heat Warning | `HUMAN_EXPOSURE` | `CATEGORY_CEILING` | `CAUTION` |
+| Heat Advisory | `HUMAN_EXPOSURE` | `SCORE_DEDUCTION` | 15 points — real, but survivable, and not a navigation hazard |
+| Wind Chill / Freeze / Frost / Cold Weather Advisory | `HUMAN_EXPOSURE` | `SCORE_DEDUCTION` | 10 points |
+| Air Quality Alert | `INFORMATIONAL` | `INFORMATIONAL_ONLY` | Surfaced, no scoring effect |
+| Any unrecognized *Watch* | `SEVERE_WEATHER` | `SCORE_DEDUCTION` | 5 points |
+| Any unrecognized *Warning* | `UNKNOWN` | `CATEGORY_CEILING` | `CAUTION` — still gated, since NWS reserves "Warning" for serious products, but not assumed marine-specific |
+| Any unrecognized *Advisory* | `UNKNOWN` | `SCORE_DEDUCTION` | 8 points |
+| Anything else | `UNKNOWN` | `INFORMATIONAL_ONLY` | Surfaced, never silently dropped |
+
+Every active alert is **always surfaced** as a `Hazard` (with `"(informational)"` appended to
+the message when it has no scoring effect) — nothing "disappears" just because it doesn't gate.
+Re-validated live: see [ASSESSMENT_VALIDATION.md](ASSESSMENT_VALIDATION.md) "Worked example 2,"
+where this exact change moved a real Clinton Lake, KS assessment from `CAUTION` (Sprint 2's
+blanket cap) to `GOOD` (a real 15-point deduction, no ceiling) for the identical live Heat
+Advisory - the intended, corrected behavior, not a loosening of safety.
+
+**The vessel-size exemption is gone.** Sprint 2 let a vessel with `VesselProfile.isSmallCraft =
+false` skip a Small Craft Advisory's category ceiling entirely, on the theory that the advisory
+is written for small vessels specifically. This was a real design mistake: it meant an active
+Small Craft Advisory could be completely invisible to the score for a larger boat. Sprint 3
+removes this - `MarineAlert.vesselSizeExemptApplicable` is kept on the type only for source
+compatibility, but `MarinePointScorer` no longer reads it. An active Small Craft Advisory now
+applies its `CAUTION` ceiling **regardless of vessel size**, always.
+
+**Classification is deliberately broad, not a marine-only allowlist**, for events that don't
+match a specific rule above - both the `UNKNOWN`/`CATEGORY_CEILING` and `UNKNOWN`/
+`SCORE_DEDUCTION` fallback rows exist so an unrecognized-but-real NWS alert is never silently
+ignored, even though it's no longer assumed to be as severe as a classified marine hazard by
+default.
 
 **Gating uses whether the alert overlaps the outing window, not whether it's active "right
 now."** `MarineAlert.overlaps(outingStart, outingEnd)` is what determines if a hazard is even
@@ -186,12 +217,14 @@ impossible to hide (like a failed alert check) — is audited in detail in
 
 **Full evidence coverage does not guarantee HIGH confidence.** `BoatingWindowAssessment.evidence`
 (a `ConfidenceEvidence` of checklist items — "NWS/general weather forecast," "Marine (wind/wave)
-forecast," "NOAA tide station," "Nearby buoy observation" — plus a `limitations` list) is
-generated separately from the confidence *level* precisely so the UI can show "every source
-responded" and *still* explain a MEDIUM/LOW confidence level, e.g. when a forecast/observation
-disagreement is detected (see "Forecast vs. observation" below) — confirmed live at Port
-Canaveral, where all four evidence items were available yet confidence was correctly MEDIUM
-because the nearest buoy's observed seas materially disagreed with the forecast.
+forecast," "NOAA tide station," "NOAA current station," "Nearby buoy observation" — plus a
+`limitations` list) is generated separately from the confidence *level* precisely so the UI can
+show "every source responded" and *still* explain a MEDIUM/LOW confidence level, e.g. when a
+forecast/observation disagreement is detected (see "Forecast vs. observation" below) — confirmed
+live at Port Canaveral during Sprint 2, where confidence was correctly MEDIUM despite full
+evidence coverage because the nearest buoy's observed seas materially disagreed with the
+forecast. Re-validated live in Sprint 3 with the corrected station-local comparison — see
+[ASSESSMENT_VALIDATION.md](ASSESSMENT_VALIDATION.md).
 
 ## Tide trend
 
@@ -231,23 +264,86 @@ hourly forecast timeline as if both represented the same instant — instead:
   distance — never simply "closest," per the product brief. Selection is capped at 75 NM;
   nothing farther is considered "nearby" for this location. See
   [DATA_SOURCES.md](DATA_SOURCES.md) for the freshness-tier thresholds and their rationale.
-- The observation is compared against the **departure-hour forecast only**, and only when the
-  observation is within a 3-hour "near-term" window of the departure instant — comparing a
-  buoy reading from right now to a departure tomorrow afternoon would say nothing meaningful.
+- **The observation is compared against a forecast for the station's own coordinates, never
+  the launch's** (Sprint 3 fix — see [STATION_REPRESENTATIVENESS.md](STATION_REPRESENTATIVENESS.md)
+  for the full mechanism and why comparing against the launch's forecast was a real bug: a
+  buoy 23 NM offshore disagreeing with an *inshore* forecast is a location difference, not a
+  forecast error). The comparison uses whichever forecast hour is nearest the observation's own
+  timestamp, within a 90-minute alignment window.
 - A `STALE` or `UNUSABLE` observation (see [DATA_SOURCES.md](DATA_SOURCES.md)) is excluded from
   disagreement detection entirely, though the station and its age are still surfaced for
   provenance ("last report 3h 20m ago").
 - `MarineDisagreementDetector` flags a material difference per field (wind ≥ 8 kt, gust ≥ 10 kt,
-  wave height ≥ 1.5 ft, visibility ≥ 1 NM, air temperature ≥ 10°F) and, when one is found, adds
-  a `MEDIUM`-capping confidence reason to that hour rather than silently averaging the two
-  values together or picking one arbitrarily.
+  wave height ≥ 1.5 ft, visibility ≥ 1 NM, air temperature ≥ 10°F).
+
+## Observation influence on assessment
+
+Sprint 2 only ever used a forecast/observation disagreement to *explain* a confidence
+downgrade — it never actually changed the category. Sprint 3 lets a station observation
+influence the departure-hour category, but only through an explicit, traceable mechanism, never
+by averaging the observed value into the forecast:
+
+`ObservationalCautionEvaluator.evaluate(comparison, departureTime, vessel)` returns a `Hazard`
+(applied to the departure point exactly like a marine-alert gate) only when **all** of:
+
+1. The station's `StationRepresentativeness` is `HIGH` or `MEDIUM` — `LOW`/`UNKNOWN` never
+   influence the assessment, no matter how alarming the reading is.
+2. The observation is within 3 hours of the planned departure — representative evidence about a
+   moment far from departure still isn't evidence about departure itself.
+3. At least one field is genuinely **worse** than what was forecast (higher wave/gust/wind, or
+   lower visibility) — an observation that's merely *different* (warmer air temperature) or
+   *better* than forecast never gates anything.
+
+When it fires, the resulting `Hazard` caps the category at `POOR` if the observed value itself
+exceeds the vessel's own tolerance, `CAUTION` otherwise — applied via the same `worstCategory()`
+mechanism as every other gate, never a fixed point deduction. See
+[STATION_REPRESENTATIVENESS.md](STATION_REPRESENTATIVENESS.md) for the full representativeness
+model this depends on.
+
+## Environment-aware evidence requirements
+
+The same missing field means different things in different places. Missing wave data at a
+genuinely coastal/offshore launch is a real evidence gap — there's a real, unaccounted-for sea
+state. Missing wave data at an inland lake is not a gap at all — there's no sea state to
+report. Sprint 2 treated both identically (missing data never gated, but also never
+distinguished the two cases). Sprint 3's `EvidenceRequirementEvaluator.evaluate(environment,
+conditions)`:
+
+- For `NEARSHORE`/`OFFSHORE`/`HARBOR`/`ESTUARY`/`INTRACOASTAL`/`GREAT_LAKES` (the
+  wave-relevant environments — see [STATION_REPRESENTATIVENESS.md](STATION_REPRESENTATIVENESS.md)),
+  a missing `waveHeightFt` ceilings that point's category at `GOOD` — `EXCELLENT` is
+  unreachable without the evidence a coastal location is expected to have, with an
+  `EVIDENCE_INCOMPLETE` hazard explaining why.
+- For `INLAND`/`RIVER`/`UNKNOWN`, no ceiling applies — missing wave data is expected, not a gap.
+- The ceiling can only ever pull the category *down* from what the raw score/other gates
+  already implied, exactly like every other gate — confirmed with a direct unit test showing a
+  coastal point with otherwise-perfect wind/visibility/thunderstorm data still caps at `GOOD`,
+  while the identical conditions at an inland point reach `EXCELLENT`.
+
+## Vessel profiles
+
+The MVP shipped one sensible default recreational profile with no selection UI. Sprint 3 adds
+the first five user-selectable presets (`VesselProfile.presets()`), each a distinct,
+internally-consistent tolerance profile: **Small recreational boat**, **Center console**,
+**Pontoon**, **PWC (jet ski)**, and **Sailboat**. The numbers are deliberately coarse,
+defensible starting points, not manufacturer sea-state specs — a PWC's low freeboard and lack
+of a cabin make it meaningfully more wind/wave-sensitive than a similarly-sized console boat,
+which the preset numbers reflect (lower gust/wave tolerance despite comparable length); a
+sailboat's tolerance reflects motoring/day-sailing in developing weather, not a bluewater
+passage, and it is not flagged `isSmallCraft` the way the others are.
+
+Selection is a compact, single-row chip picker on the plan screen (never a full-screen editor
+this sprint) and persists across app restarts via `VesselPreferenceStore` (a plain
+`SharedPreferences` value — a single scalar for a single-user app doesn't warrant a new Room
+entity/migration). **Vessel choice only ever changes which tolerances scoring reads — it can
+never override, hide, or downgrade an active marine-alert gate.** The alert relevance model
+above gates identically regardless of which preset is selected; only the numeric wind/wave/
+gust/visibility thresholds vary by vessel.
 
 ## Explicitly not vessel-hardcoded
 
 Every threshold in the gates table and every deduction curve reads from `VesselProfile`
 (`windTolerance`, `gustTolerance`, `waveTolerance`, `thunderstormTolerance`,
-`visibilityTolerance`, plus `vesselType`/`length` informing the Small Craft Advisory
-exemption). The MVP ships one sensible default recreational profile, but the scoring engine
-itself has no motorcycle-style single-hardcoded-vehicle assumption anywhere in it — a
-pontoon, a PWC, and a 34' cruiser run through the exact same functions with different
-tolerance inputs.
+`visibilityTolerance`). The scoring engine itself has no single-hardcoded-vehicle assumption
+anywhere in it — a pontoon, a PWC, and a 34' cruiser run through the exact same functions with
+different tolerance inputs.

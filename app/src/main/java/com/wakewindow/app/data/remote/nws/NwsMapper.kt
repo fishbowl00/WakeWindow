@@ -1,6 +1,10 @@
 package com.wakewindow.app.data.remote.nws
 
+import com.wakewindow.app.domain.alert.AlertImpactBehavior
+import com.wakewindow.app.domain.alert.AlertImpactCategory
+import com.wakewindow.app.domain.alert.AlertSeverityCap
 import com.wakewindow.app.domain.alert.MarineAlert
+import com.wakewindow.app.domain.alert.MarineAlertImpact
 import com.wakewindow.app.domain.alert.MarineAlertSeverity
 import com.wakewindow.app.domain.marine.MarineConditions
 import com.wakewindow.app.domain.model.Confidence
@@ -96,45 +100,117 @@ object NwsMapper {
                 expires = (p.ends ?: p.expires)?.let { runCatching { parseNwsInstant(it) }.getOrNull() },
                 areaDescription = p.areaDesc,
                 vesselSizeExemptApplicable = classification.vesselSizeExemptApplicable,
+                impact = classification.impact,
             )
         }
 
-    data class AlertClassification(val severity: MarineAlertSeverity, val vesselSizeExemptApplicable: Boolean)
+    data class AlertClassification(
+        val severity: MarineAlertSeverity,
+        val vesselSizeExemptApplicable: Boolean,
+        val impact: MarineAlertImpact,
+    )
 
     /**
      * Classifies by event-text substring, matching RideCast's own hazard-tiering approach
      * (see docs/RIDECAST_REFERENCE_AUDIT.md section 7), extended with marine event types and
-     * a per-alert vessel-size-exemption flag - see docs/MARINE_SCORING.md "Marine alert
-     * gating" for the full rationale table. Only Small Craft Advisory is size-exempt: a Dense
-     * Fog Advisory, a Gale Warning, or a Severe Thunderstorm Warning is dangerous to a large
-     * vessel too, so those gate every vessel regardless of [VesselProfile.isSmallCraft][com.wakewindow.app.domain.vessel.VesselProfile.isSmallCraft].
+     * the [MarineAlertImpact] relevance model - see docs/MARINE_SCORING.md "Alert relevance
+     * model" for the full rationale table and why this replaces Sprint 2's blanket
+     * "any advisory/warning caps the category" policy: a Heat Advisory and a Small Craft
+     * Advisory are not the same kind of consequence, and treating them identically was a real
+     * gap this table now fixes.
+     *
+     * **`vesselSizeExemptApplicable` is computed but no longer consulted by scoring** - see
+     * [MarineAlert]'s doc comment. A Small Craft Advisory is always surfaced and always applies
+     * its category ceiling.
      */
     fun classify(event: String): AlertClassification {
         val e = event.lowercase()
         return when {
-            "hurricane" in e || "tropical storm" in e || "special marine warning" in e ->
-                AlertClassification(MarineAlertSeverity.EXTREME, vesselSizeExemptApplicable = false)
-            "severe thunderstorm warning" in e ->
+            "hurricane" in e || "tropical storm" in e ->
+                extreme(MarineAlertSeverity.EXTREME, AlertImpactCategory.SEVERE_WEATHER)
+            "special marine warning" in e ->
+                extreme(MarineAlertSeverity.EXTREME, AlertImpactCategory.MARINE_NAVIGATION)
+            "severe thunderstorm warning" in e || ("tornado" in e && "warning" in e) ->
                 // A confirmed, currently-occurring severe convective cell (near-gale gusts +
-                // lightning) is treated as seriously as a formal marine warning - it is a much
+                // lightning) is treated as seriously as a formal marine warning - a much
                 // stronger signal than the probabilistic thunderstorm forecast already scored
                 // separately in MarinePointScorer.
-                AlertClassification(MarineAlertSeverity.EXTREME, vesselSizeExemptApplicable = false)
+                extreme(MarineAlertSeverity.EXTREME, AlertImpactCategory.SEVERE_WEATHER)
             "gale" in e || "storm warning" in e ->
-                AlertClassification(MarineAlertSeverity.SEVERE, vesselSizeExemptApplicable = false)
+                AlertClassification(
+                    MarineAlertSeverity.SEVERE, false,
+                    MarineAlertImpact(AlertImpactCategory.MARINE_NAVIGATION, AlertImpactBehavior.CATEGORY_CEILING, AlertSeverityCap.POOR),
+                )
             "small craft advisory" in e ->
-                AlertClassification(MarineAlertSeverity.ADVISORY, vesselSizeExemptApplicable = true)
+                AlertClassification(
+                    MarineAlertSeverity.ADVISORY, vesselSizeExemptApplicable = true,
+                    MarineAlertImpact(AlertImpactCategory.MARINE_NAVIGATION, AlertImpactBehavior.CATEGORY_CEILING, AlertSeverityCap.CAUTION),
+                )
             "dense fog" in e ->
-                AlertClassification(MarineAlertSeverity.ADVISORY, vesselSizeExemptApplicable = false)
+                AlertClassification(
+                    MarineAlertSeverity.ADVISORY, false,
+                    MarineAlertImpact(AlertImpactCategory.MARINE_NAVIGATION, AlertImpactBehavior.CATEGORY_CEILING, AlertSeverityCap.CAUTION),
+                )
+            // Deliberately excludes "watch" - a not-yet-occurring Coastal Flood Watch belongs
+            // to the generic watch handling below (matching existing severity classification),
+            // while an active Advisory/Warning is a real, current access impact.
+            "coastal flood" in e && "watch" !in e ->
+                AlertClassification(
+                    MarineAlertSeverity.ADVISORY, false,
+                    MarineAlertImpact(AlertImpactCategory.COASTAL_ACCESS, AlertImpactBehavior.CATEGORY_CEILING, AlertSeverityCap.CAUTION),
+                )
+            "excessive heat warning" in e ->
+                AlertClassification(
+                    MarineAlertSeverity.SEVERE, false,
+                    MarineAlertImpact(AlertImpactCategory.HUMAN_EXPOSURE, AlertImpactBehavior.CATEGORY_CEILING, AlertSeverityCap.CAUTION),
+                )
+            "heat advisory" in e ->
+                AlertClassification(
+                    MarineAlertSeverity.ADVISORY, false,
+                    MarineAlertImpact(AlertImpactCategory.HUMAN_EXPOSURE, AlertImpactBehavior.SCORE_DEDUCTION, scoreDeduction = 15.0),
+                )
+            "wind chill" in e || "freeze" in e || "frost" in e || "cold weather" in e ->
+                AlertClassification(
+                    MarineAlertSeverity.ADVISORY, false,
+                    MarineAlertImpact(AlertImpactCategory.HUMAN_EXPOSURE, AlertImpactBehavior.SCORE_DEDUCTION, scoreDeduction = 10.0),
+                )
+            "air quality" in e ->
+                AlertClassification(
+                    MarineAlertSeverity.ADVISORY, false,
+                    MarineAlertImpact(AlertImpactCategory.INFORMATIONAL, AlertImpactBehavior.INFORMATIONAL_ONLY),
+                )
             "watch" in e ->
-                AlertClassification(MarineAlertSeverity.WATCH, vesselSizeExemptApplicable = false)
+                AlertClassification(
+                    MarineAlertSeverity.WATCH, false,
+                    MarineAlertImpact(AlertImpactCategory.SEVERE_WEATHER, AlertImpactBehavior.SCORE_DEDUCTION, scoreDeduction = 5.0),
+                )
+            // An unrecognized *warning*-tier alert - NWS reserves "Warning" for its more
+            // serious products in general, so this still applies a moderate ceiling rather
+            // than being ignored, without assuming it's marine-navigation-specific.
             "warning" in e ->
-                AlertClassification(MarineAlertSeverity.SEVERE, vesselSizeExemptApplicable = false)
+                AlertClassification(
+                    MarineAlertSeverity.SEVERE, false,
+                    MarineAlertImpact(AlertImpactCategory.UNKNOWN, AlertImpactBehavior.CATEGORY_CEILING, AlertSeverityCap.CAUTION),
+                )
+            // An unrecognized *advisory*-tier alert - real, worth a deduction, but not treated
+            // as equivalent to a marine emergency just because the word "advisory" appears.
             "advisory" in e ->
-                AlertClassification(MarineAlertSeverity.ADVISORY, vesselSizeExemptApplicable = false)
-            else -> AlertClassification(MarineAlertSeverity.UNKNOWN, vesselSizeExemptApplicable = false)
+                AlertClassification(
+                    MarineAlertSeverity.ADVISORY, false,
+                    MarineAlertImpact(AlertImpactCategory.UNKNOWN, AlertImpactBehavior.SCORE_DEDUCTION, scoreDeduction = 8.0),
+                )
+            else ->
+                AlertClassification(
+                    MarineAlertSeverity.UNKNOWN, false,
+                    MarineAlertImpact(AlertImpactCategory.UNKNOWN, AlertImpactBehavior.INFORMATIONAL_ONLY),
+                )
         }
     }
+
+    private fun extreme(severity: MarineAlertSeverity, category: AlertImpactCategory) = AlertClassification(
+        severity, false,
+        MarineAlertImpact(category, AlertImpactBehavior.HARD_GATE, AlertSeverityCap.NO_GO),
+    )
 
     /** Kept for source compatibility with existing call sites/tests that only need the tier. */
     fun classifySeverity(event: String): MarineAlertSeverity = classify(event).severity

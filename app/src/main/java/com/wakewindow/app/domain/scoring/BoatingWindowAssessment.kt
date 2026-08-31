@@ -2,7 +2,9 @@ package com.wakewindow.app.domain.scoring
 
 import com.wakewindow.app.domain.model.Confidence
 import com.wakewindow.app.domain.observation.MarineDisagreement
+import com.wakewindow.app.domain.observation.ObservationForecastComparison
 import com.wakewindow.app.domain.observation.SelectedMarineStation
+import com.wakewindow.app.domain.observation.WaterEnvironment
 import java.time.Instant
 
 /** Home-screen headline number/category plus the specific reasons driving it - never a
@@ -56,7 +58,19 @@ data class BoatingWindowAssessment(
     val confidence: Confidence,
     val evidence: ConfidenceEvidence = ConfidenceEvidence(emptyList(), emptyList()),
     val nearestObservationStation: SelectedMarineStation? = null,
+    /** Convenience view of [observationComparison]'s disagreements, kept for callers that only
+     * care about the messages - the full comparison (representativeness, status, timestamps)
+     * lives on [observationComparison]. */
     val disagreements: List<MarineDisagreement> = emptyList(),
+    /** The full forecast-vs-observation comparison, always evaluated at the station's own
+     * coordinates - see [com.wakewindow.app.data.repository.DefaultBoatingRepository] and
+     * docs/MARINE_SCORING.md "Forecast vs. observation." Null exactly when
+     * [nearestObservationStation] is null (no station/observation was available at all). */
+    val observationComparison: ObservationForecastComparison? = null,
+    /** The launch's classified water body - see [WaterEnvironment] and
+     * docs/STATION_REPRESENTATIVENESS.md. UNKNOWN when the available signals didn't support a
+     * confident classification. */
+    val waterEnvironment: WaterEnvironment = WaterEnvironment.UNKNOWN,
 ) {
     val allPoints: List<PointAssessment> get() =
         listOf(departureAssessment) + underwayAssessments + returnAssessment

@@ -9,6 +9,7 @@ import com.wakewindow.app.domain.place.MarinePlaceCandidate
 import com.wakewindow.app.domain.place.PlaceSearchOutcome
 import com.wakewindow.app.domain.place.SavedLaunch
 import com.wakewindow.app.domain.route.BoatingPlan
+import com.wakewindow.app.domain.vessel.VesselProfile
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -22,12 +23,22 @@ class WakeWindowViewModel(application: Application) : AndroidViewModel(applicati
     private val savedLaunchRepository = AppDependencies.savedLaunchRepository(application)
     private val placeProvider = AppDependencies.placeProvider()
     private val boatingRepository = AppDependencies.boatingRepository()
+    private val vesselPreferenceStore = AppDependencies.vesselPreferenceStore(application)
 
-    private val _uiState = MutableStateFlow(WakeWindowUiState())
+    private val _uiState = MutableStateFlow(WakeWindowUiState(vessel = vesselPreferenceStore.loadSelectedPreset() ?: VesselProfile.default()))
     val uiState: StateFlow<WakeWindowUiState> = _uiState.asStateFlow()
 
     init {
         loadSavedLaunches()
+    }
+
+    /** Changing vessel never overrides an active marine warning gate or hides a hazard - it
+     * only changes which tolerances [com.wakewindow.app.domain.scoring.MarinePointScorer]
+     * scores against. Persisted immediately so the choice survives app restarts - see
+     * [com.wakewindow.app.data.local.VesselPreferenceStore]. */
+    fun setVessel(profile: VesselProfile) {
+        vesselPreferenceStore.saveSelectedPreset(profile)
+        _uiState.update { it.copy(vessel = profile) }
     }
 
     fun loadSavedLaunches() {

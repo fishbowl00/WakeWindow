@@ -1,13 +1,18 @@
 package com.wakewindow.app
 
 import android.content.Context
+import com.wakewindow.app.data.local.VesselPreferenceStore
 import com.wakewindow.app.data.local.WakeWindowDatabase
+import com.wakewindow.app.data.place.CompositeMarinePlaceProvider
+import com.wakewindow.app.data.remote.coops.CoopsCurrentProvider
 import com.wakewindow.app.data.remote.coops.CoopsTideProvider
+import com.wakewindow.app.data.remote.fwc.FwcBoatRampProvider
 import com.wakewindow.app.data.remote.ndbc.NdbcObservationProvider
 import com.wakewindow.app.data.remote.nws.NwsProviders
 import com.wakewindow.app.data.remote.openmeteo.OpenMeteoGeneralProvider
 import com.wakewindow.app.data.remote.openmeteo.OpenMeteoMarineProvider
 import com.wakewindow.app.data.remote.photon.PhotonPlaceProvider
+import com.wakewindow.app.data.remote.usace.UsaceRecreationProvider
 import com.wakewindow.app.data.repository.DefaultBoatingRepository
 import com.wakewindow.app.data.repository.RoomSavedLaunchRepository
 import com.wakewindow.app.domain.observation.MarineObservationProvider
@@ -36,7 +41,21 @@ object AppDependencies {
     fun savedLaunchRepository(context: Context): SavedLaunchRepository =
         RoomSavedLaunchRepository(database(context).savedLaunchDao())
 
-    fun placeProvider(): MarinePlaceProvider = PhotonPlaceProvider()
+    private var vesselPreferenceStore: VesselPreferenceStore? = null
+
+    fun vesselPreferenceStore(context: Context): VesselPreferenceStore =
+        vesselPreferenceStore ?: VesselPreferenceStore(context).also { vesselPreferenceStore = it }
+
+    /**
+     * Boating-specific, government-sourced discovery (Florida FWC boat ramps, USACE
+     * reservoir recreation areas) is fanned out ahead of general-purpose keyless geocoding
+     * (Photon), which is kept only as the broad-coverage fallback - see
+     * docs/PLACE_DISCOVERY.md.
+     */
+    fun placeProvider(): MarinePlaceProvider = CompositeMarinePlaceProvider(
+        boatingSources = listOf(FwcBoatRampProvider(), UsaceRecreationProvider()),
+        fallback = PhotonPlaceProvider(),
+    )
 
     fun observationProvider(): MarineObservationProvider = NdbcObservationProvider()
 
@@ -54,5 +73,7 @@ object AppDependencies {
         alertProvider = nwsProviders,
         tideProvider = CoopsTideProvider(),
         observationProvider = observationProvider(),
+        pointTypeProvider = nwsProviders,
+        currentProvider = CoopsCurrentProvider(),
     )
 }

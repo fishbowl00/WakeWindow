@@ -1,5 +1,6 @@
 package com.wakewindow.app.data.repository
 
+import com.wakewindow.app.data.remote.nws.NwsMapper
 import com.wakewindow.app.domain.alert.MarineAlert
 import com.wakewindow.app.domain.alert.MarineAlertOutcome
 import com.wakewindow.app.domain.alert.MarineAlertProvider
@@ -90,17 +91,27 @@ class DefaultBoatingRepositoryTest {
         override suspend fun nearestObservation(location: GeoPoint) = result
     }
 
+    private class FakeCurrentProvider(
+        private val stationOutcome: com.wakewindow.app.domain.tide.CurrentStationOutcome = com.wakewindow.app.domain.tide.CurrentStationOutcome.NoStationNearby,
+        private val events: List<com.wakewindow.app.domain.tide.CurrentEvent> = emptyList(),
+    ) : com.wakewindow.app.domain.tide.CurrentProvider {
+        override suspend fun nearestStation(location: GeoPoint) = stationOutcome
+        override suspend fun events(stationId: String, date: LocalDate) = com.wakewindow.app.domain.tide.CurrentEventsOutcome.Success(events)
+    }
+
     private fun repository(
         general: ForecastOutcome,
         marine: ForecastOutcome,
         alerts: MarineAlertOutcome,
         observation: MarineObservationOutcome = MarineObservationOutcome.NoStationAvailable,
+        current: com.wakewindow.app.domain.tide.CurrentProvider = FakeCurrentProvider(),
     ) = DefaultBoatingRepository(
         generalProviders = listOf(FakeGeneralProvider(general)),
         marineForecastProviders = listOf(FakeMarineProvider(marine)),
         alertProvider = FakeAlertProvider(alerts),
         tideProvider = FakeTideProvider(),
         observationProvider = FakeObservationProvider(observation),
+        currentProvider = current,
     )
 
     @Test
@@ -142,6 +153,7 @@ class DefaultBoatingRepositoryTest {
         val warning = MarineAlert(
             id = "smw", event = "Special Marine Warning", headline = null, severity = MarineAlertSeverity.EXTREME,
             effective = departure.plusSeconds(1800), expires = departure.plusSeconds(7200), areaDescription = null,
+            impact = NwsMapper.classify("Special Marine Warning").impact,
         )
         val repo = repository(
             general = ForecastOutcome.Success(calm),
@@ -159,6 +171,7 @@ class DefaultBoatingRepositoryTest {
         val expiredWarning = MarineAlert(
             id = "old", event = "Special Marine Warning", headline = null, severity = MarineAlertSeverity.EXTREME,
             effective = departure.minusSeconds(3 * 3600), expires = departure.minusSeconds(3600), areaDescription = null,
+            impact = NwsMapper.classify("Special Marine Warning").impact,
         )
         val repo = repository(
             general = ForecastOutcome.Success(calm),
@@ -176,6 +189,7 @@ class DefaultBoatingRepositoryTest {
         val futureWarning = MarineAlert(
             id = "future", event = "Special Marine Warning", headline = null, severity = MarineAlertSeverity.EXTREME,
             effective = returnTime.plusSeconds(3 * 3600), expires = returnTime.plusSeconds(6 * 3600), areaDescription = null,
+            impact = NwsMapper.classify("Special Marine Warning").impact,
         )
         val repo = repository(
             general = ForecastOutcome.Success(calm),
@@ -248,5 +262,44 @@ class DefaultBoatingRepositoryTest {
         val assessment = repo.buildAssessment(plan())
 
         assertTrue(assessment.disagreements.isEmpty())
+    }
+
+    @Test
+    fun `with no current provider wired, the assessment still builds and reports no current station`() = runBlocking {
+        val calm = calmSeries(departure.minusSeconds(3600), returnTime.plusSeconds(3600))
+        val repo = repository(
+            general = ForecastOutcome.Success(calm),
+            marine = ForecastOutcome.Success(calm),
+            alerts = MarineAlertOutcome.Success(emptyList()),
+            current = FakeCurrentProvider(stationOutcome = com.wakewindow.app.domain.tide.CurrentStationOutcome.NoStationNearby),
+        )
+        val assessment = repo.buildAssessment(plan())
+
+        assertEquals(BoatingCategory.EXCELLENT, assessment.overallAssessment.category)
+        assertTrue(assessment.evidence.items.none { it.label.contains("current", ignoreCase = true) && it.available })
+    }
+
+    @Test
+    fun `a nearby current station's predictions flow into the departure hour's conditions`() = runBlocking {
+        val calm = calmSeries(departure.minusSeconds(3600), returnTime.plusSeconds(3600))
+        val floodEvent = com.wakewindow.app.domain.tide.CurrentEvent(
+            com.wakewindow.app.domain.tide.CurrentEventType.FLOOD_MAX, departure, 2.5, 90.0,
+        )
+        val repo = repository(
+            general = ForecastOutcome.Success(calm),
+            marine = ForecastOutcome.Success(calm),
+            alerts = MarineAlertOutcome.Success(emptyList()),
+            current = FakeCurrentProvider(
+                stationOutcome = com.wakewindow.app.domain.tide.CurrentStationOutcome.Found(
+                    com.wakewindow.app.domain.tide.CurrentStation("ACT1234", "Test Inlet", location, distanceNm = 2.0),
+                ),
+                events = listOf(floodEvent),
+            ),
+        )
+        val assessment = repo.buildAssessment(plan())
+
+        assertEquals(2.5, assessment.departureAssessment.conditions?.currentSpeedKts!!, 0.01)
+        assertEquals(90.0, assessment.departureAssessment.conditions?.currentDirectionDeg)
+        assertTrue(assessment.evidence.items.any { it.label.contains("current", ignoreCase = true) && it.available })
     }
 }

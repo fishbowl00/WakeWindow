@@ -38,30 +38,39 @@ com.wakewindow.app
 │   ├── model/                  — GeoPoint, SourceReference (+ SourceType), Confidence, Units
 │   ├── marine/                 — MarineConditions, MarineForecastProvider
 │   ├── weather/                — GeneralWeatherProvider, ForecastOutcome (shared by general + marine fetches)
-│   ├── tide/                   — TideProvider, CurrentProvider, TideEvent/TideTrend, TideTimeline, station models
-│   ├── alert/                  — MarineAlertProvider, MarineAlert, AlertTiming
+│   ├── tide/                   — TideProvider, CurrentProvider, TideEvent/TideTrend/CurrentEvent,
+│   │                              TideTimeline/CurrentTimeline, station models
+│   ├── alert/                  — MarineAlertProvider, MarineAlert, AlertTiming,
+│   │                              MarineAlertImpact (+ AlertImpactCategory/Behavior, AlertSeverityCap)
 │   ├── observation/             — MarineObservationProvider, SelectedMarineStation,
-│   │                              ObservationFreshness, MarineDisagreement(Detector)
+│   │                              ObservationFreshness, MarineDisagreement(Detector),
+│   │                              WaterEnvironment(Classifier), WaterPointTypeProvider,
+│   │                              StationRepresentativeness(Evaluator), ObservationForecastComparison
 │   ├── place/                  — MarinePlace, MarineFacilityInfo (+ FacilityAvailability),
-│   │                              MarinePlaceProvider, MarineFacilityInfoProvider (no impl yet), SavedLaunch(Repository)
+│   │                              MarinePlaceProvider, PlaceSourceType,
+│   │                              MarineFacilityInfoProvider (no impl yet), SavedLaunch(Repository)
 │   ├── vessel/                 — VesselProfile, VesselType, presets
 │   ├── route/                  — RouteSample, RouteSampleRole, BoatingPlan, BoatingRepository
 │   ├── consensus/               — multi-provider merge for MarineConditions
 │   ├── scoring/                 — BoatingCategory, Hazard, PointAssessment,
 │   │                              BoatingWindowAssessment, BestWindow, ConfidenceEvidence,
-│   │                              MarineScoreEngine, MarinePointScorer, BestWindowFinder
+│   │                              MarineScoreEngine, MarinePointScorer, BestWindowFinder,
+│   │                              ObservationalCautionEvaluator, EvidenceRequirementEvaluator
 │   └── settings/                — AppSettings, AppearanceMode, unit preference
 ├── data/
 │   ├── remote/
 │   │   ├── nws/                 — points → grid → forecastGridData (general + marine + alerts, one fetch)
 │   │   ├── openmeteo/           — general + marine (dev-only, license-gated - see DATA_SOURCES.md)
-│   │   ├── coops/                — NOAA CO-OPS tide predictions + station metadata
+│   │   ├── coops/                — NOAA CO-OPS tide + current predictions, station metadata
 │   │   ├── ndbc/                 — NOAA NDBC buoy observations: parser, station selector/directory, provider
-│   │   └── photon/               — keyless place search
-│   ├── local/                    — Room: SavedLaunchEntity
+│   │   ├── fwc/                   — Florida FWC boat ramp inventory (place discovery)
+│   │   ├── usace/                 — USACE recreation-area parcels (place discovery)
+│   │   └── photon/               — keyless place search (fallback)
+│   ├── place/                    — CompositeMarinePlaceProvider (fan-out + rank + dedup across sources)
+│   ├── local/                    — Room: SavedLaunchEntity; SharedPreferences: VesselPreferenceStore
 │   ├── mapper/                   — DTO → domain, one file per provider
-│   └── repository/               — DefaultBoatingRepository (provider fan-out + consensus + disagreement),
-│                                    RoomSavedLaunchRepository
+│   └── repository/               — DefaultBoatingRepository (provider fan-out + consensus + station-local
+│                                    forecast/observation comparison), RoomSavedLaunchRepository
 ├── ui/
 │   ├── theme/                    — WakeWindowTheme, AppearanceMode resolution, CategoryColors
 │   ├── splash/                   — InknautSplashScreen
@@ -125,6 +134,7 @@ interface TideProvider {
 
 interface CurrentProvider {
     suspend fun nearestStation(location: GeoPoint): CurrentStationOutcome
+    suspend fun events(stationId: String, date: LocalDate): CurrentEventsOutcome
 }
 
 interface MarineAlertProvider {
@@ -172,6 +182,7 @@ data class MarineConditions(
     val nextLowTide: TideEvent?,
     val currentSpeedKts: Double?,
     val currentDirectionDeg: Double?,
+    val nextCurrentEvent: CurrentEvent?,
     val marineAlerts: List<MarineAlert>,
     val source: SourceReference,
     val observationAgeMinutes: Int?,   // null for a forecast value, set for an observation
@@ -221,8 +232,13 @@ matter — see "Scale and Provider Risk" in [ROADMAP.md](ROADMAP.md).
 
 ## What's deliberately not here yet
 
-WorkManager background refresh, notifications, maps, `CurrentProvider`/`MarineFacilityInfoProvider`
-implementations, the Inknaut splash's onboarding-check gate, and Mode B (port-to-port) route
-generation are all out of scope so far — see [ROADMAP.md](ROADMAP.md). NDBC observations
-(`MarineObservationProvider`) shipped in Sprint 2, exactly along the seam described above,
-without touching any call site that predates it.
+WorkManager background refresh, notifications, maps, `MarineFacilityInfoProvider`
+implementations, real-time (PORTS) current *observations* (only *predictions* are implemented -
+see [DATA_SOURCES.md](DATA_SOURCES.md)), the Inknaut splash's onboarding-check gate, and Mode B
+(port-to-port) route generation are all out of scope so far — see [ROADMAP.md](ROADMAP.md).
+NDBC observations (`MarineObservationProvider`) shipped in Sprint 2; `CurrentProvider`
+(NOAA CO-OPS current predictions), the FWC/USACE place-discovery sources, station
+representativeness/environment classification, the alert relevance model, and the first vessel
+presets all shipped in Sprint 3 — each along the same "new implementation of an existing seam,
+or a new interface consumed by an existing call site" pattern, without a call site that
+predates it needing to change shape.

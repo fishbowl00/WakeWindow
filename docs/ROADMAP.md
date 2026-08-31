@@ -42,21 +42,59 @@ uncertainty, and the start of the launch-intelligence system. Shipped:
    plain-language limitations, not just a bare HIGH/MEDIUM/LOW badge.
 10. Date + outing-duration added to the plan screen (previously time-of-day only).
 
+## Sprint 3 — Decision intelligence + real launch discovery (complete)
+
+Goal: does WakeWindow understand *where its evidence came from* and whether that evidence
+actually represents the user's boating environment? Shipped:
+
+1. Forecast-vs-observation comparison fixed to compare **forecast-at-station vs.
+   observed-at-station**, never launch-vs-buoy (a real Sprint 2 methodology bug) — see
+   [STATION_REPRESENTATIVENESS.md](STATION_REPRESENTATIVENESS.md).
+2. `WaterEnvironment` classification and `StationRepresentativeness` scoring, so a station's
+   distance/environment match to the launch is an explicit, UI-visible fact, not implicit.
+3. A fresh, representative, materially-worse observation can now influence the departure-hour
+   category via an explicit hazard/gate (`ObservationalCautionEvaluator`) — never by averaging.
+4. Environment-aware evidence requirements (`EvidenceRequirementEvaluator`) — missing wave data
+   ceilings a coastal launch's category at `GOOD`; an inland lake is never penalized for
+   evidence that was never going to exist there.
+5. The alert relevance model (`MarineAlertImpact`) replaced Sprint 2's blanket "any advisory
+   caps at CAUTION" policy — see [MARINE_SCORING.md](MARINE_SCORING.md) "Alert relevance
+   model." The Small Craft Advisory vessel-size exemption was removed (it's always surfaced and
+   always gates now, regardless of vessel size).
+6. `CurrentProvider` implemented via NOAA CO-OPS current predictions (`CoopsCurrentProvider`),
+   including flood/ebb/slack event modeling (`CurrentTimeline`) — see
+   [DATA_SOURCES.md](DATA_SOURCES.md).
+7. Real boating-relevant place discovery: Florida FWC boat ramp inventory and USACE
+   recreation-area data, fanned out and ranked ahead of Photon
+   (`CompositeMarinePlaceProvider`) — see [PLACE_DISCOVERY.md](PLACE_DISCOVERY.md).
+8. The first five user-selectable vessel presets, persisted, displayed as a compact chip row.
+9. Port Canaveral and Clinton Lake, KS both re-validated live against the corrected
+   methodology, honestly — including a real duplicate-hazard-display bug (nine identical Heat
+   Advisory entries for one nine-hour outing) found and fixed *during* this live
+   re-validation, not before it. See [ASSESSMENT_VALIDATION.md](ASSESSMENT_VALIDATION.md).
+
 ## Next sprint (highest-value follow-on)
 
-1. **Vessel profile UI** — let users switch between a couple of built-in profiles (center
-   console, pontoon, PWC) before investing in full custom profile editing.
-2. **A real facility-intelligence source** for `MarineFacilityInfoProvider` — starting with one
-   controlled, licensable source (see "Launch intelligence" below) rather than attempting broad
-   coverage at once.
-3. **`CurrentProvider` implementation** (NOAA CO-OPS current predictions/observations) — the
-   interface exists; every confidence explanation currently lists "no local current station
-   available" as a standing limitation.
-4. A real caching layer around `DefaultBoatingRepository.buildAssessment()` (see "Scale and
-   Provider Risk" below) — currently every call fans out to every provider fresh.
-5. Expand automated test coverage around real-world edge cases as they're found on-device
+1. **A real facility-intelligence source** for `MarineFacilityInfoProvider` — Florida FWC's own
+   boat ramp data already includes richer per-ramp fields (`RampType`, `TotalLanes`,
+   `Amenities`, `ContactPhone`) that Sprint 3's discovery integration currently discards down
+   to a bare `MarinePlaceCandidate` — wiring FWC in as a genuine `MarineFacilityInfoProvider`
+   for Florida launches specifically is a concrete, scoped starting point (see
+   [PLACE_DISCOVERY.md](PLACE_DISCOVERY.md)), rather than a general-purpose scraper.
+2. **Bias/location-scoped place search** — `MarinePlaceProvider.search()` already accepts an
+   optional `bias: GeoPoint?`, but the search UI never supplies one; wiring the user's
+   last-known or currently-viewed location through would let FWC/USACE narrow by proximity
+   instead of text-matching the whole dataset.
+3. **Real-time current *observations*** (PORTS-equipped stations), distinct from the
+   predictions-only implementation shipped this sprint.
+4. Editable, custom vessel profiles beyond the five built-in presets.
+5. A real caching layer around `DefaultBoatingRepository.buildAssessment()` (see "Scale and
+   Provider Risk" below) — currently every call fans out to every provider fresh, and Sprint 3
+   added more providers to that fan-out (current stations, station-local re-fetch for
+   comparison, FWC/USACE search).
+6. Expand automated test coverage around real-world edge cases as they're found on-device
    (DST transitions, provider outages during a live session, more inland/sparse-data
-   locations beyond the one Kansas case tested so far).
+   locations beyond the two cases validated so far).
 
 ## Launch intelligence — deliberately not a web scraper
 
@@ -69,10 +107,18 @@ future sprint, none yet evaluated for licensing terms or API availability:
 
 - Official port/harbor-authority websites or APIs where one exists and terms permit reuse
   (`SourceType.OFFICIAL_PORT`).
-- State boating-access-site datasets — several states publish structured ramp/facility data
-  for public boat ramps (`SourceType.STATE_AGENCY`).
-- USACE facility data for Corps-managed lakes and reservoirs (`SourceType.USACE`) — plausible
-  for the Clinton Lake, KS class of location tested this sprint.
+- **Florida FWC's boat ramp inventory (`SourceType.STATE_AGENCY`) — the closest thing to a
+  ready-made source, evaluated for *discovery* in Sprint 3.** Its own schema already carries
+  `RampType`, `AccessType`, `TotalLanes`, `Amenities`, and `ContactPhone` — genuine facility
+  fields, not just a name/coordinate — that Sprint 3's `FwcMapper` currently discards down to a
+  bare `MarinePlaceCandidate`. Wiring these through into `MarineFacilityInfo` is real, scoped
+  work for Florida launches, not a new integration.
+- USACE recreation-area data (`SourceType.USACE`) — **evaluated in Sprint 3 and found not to be
+  a facility-intelligence source**: it identifies that a Corps-managed recreation area exists
+  near a query (used for place *discovery* — see [PLACE_DISCOVERY.md](PLACE_DISCOVERY.md)), but
+  carries no field asserting a ramp, its lane count, or its amenities. A real USACE facility
+  source, if one exists, would need to be a different dataset than the one integrated this
+  sprint.
 - A WakeWindow-curated dataset for a small number of high-traffic launches, manually verified
   and dated (`SourceType.USER_PROVIDED`/an internal curation source type), as a bootstrap
   before any automated source exists.
@@ -81,11 +127,13 @@ future sprint, none yet evaluated for licensing terms or API availability:
 
 Not built yet — this section records what would need attention before real user growth, so
 scale problems aren't discovered for the first time in production. All figures are estimates
-based on the request pattern in `DefaultBoatingRepository.buildAssessment()`, which currently
-makes 7-8 outbound calls per assessment (NWS grid, NWS alerts, Open-Meteo general, Open-Meteo
-marine, CO-OPS station list, CO-OPS tide predictions, NDBC snapshot, NDBC station names) with
-**no caching above the individual-provider level** — see "Caching" in
-[ARCHITECTURE.md](ARCHITECTURE.md).
+based on the request pattern in `DefaultBoatingRepository.buildAssessment()`, which as of
+Sprint 3 makes on the order of 10-12 outbound calls per assessment (NWS grid, NWS alerts,
+Open-Meteo general, Open-Meteo marine, CO-OPS tide station list + predictions, CO-OPS current
+station list + predictions, NDBC snapshot, NDBC station names, plus a **second**, narrower
+general+marine fetch at the observation station's own coordinates for the forecast-vs-
+observation comparison when a station is available) with **no caching above the
+individual-provider level** — see "Caching" in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 | Users (concurrent-ish daily actives) | Primary risk | Notes |
 |---|---|---|
@@ -112,7 +160,7 @@ additive later rather than requiring rework, but are explicitly out of scope so 
 - Route-aware marine weather along a real charted course.
 - Tidal-current effects on a planned route.
 - Multi-day boating outlook (beyond a single day's hourly assessment).
-- Saved custom vessel profiles beyond a couple of built-in presets.
+- Editable, saved custom vessel profiles beyond the five built-in presets shipped in Sprint 3.
 - Fuel-range planning.
 - Sunrise/sunset and moon phase display.
 - Fishing-specific mode; paddle/PWC-specific profiles.
