@@ -287,7 +287,7 @@ private fun LocationCard(place: MarinePlace) {
     val known = buildList {
         place.discovery.address?.let { add("Address" to it) }
         facility.waterBodyName?.let { add("Waterbody" to it) }
-        add("Coordinates" to "${String.format("%.5f", place.location.latitude)}, ${String.format("%.5f", place.location.longitude)}")
+        add("Coordinates" to "${String.format(Locale.US, "%.5f", place.location.latitude)}, ${String.format(Locale.US, "%.5f", place.location.longitude)}")
     }
     InfoSection("Location", known, emptyList())
 }

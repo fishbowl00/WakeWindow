@@ -228,10 +228,10 @@ private fun ConditionsGrid(point: PointAssessment) {
             Spacer(modifier = Modifier.height(8.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 MetricColumn("Wind", c?.sustainedWindKts?.let { "${it.roundToInt()} kt" } ?: "—", c?.gustKts?.let { "Gusts ${it.roundToInt()} kt" })
-                MetricColumn("Seas", c?.waveHeightFt?.let { "${String.format("%.1f", it)} ft" } ?: "—", c?.wavePeriodSec?.let { "${it.roundToInt()}s period" })
+                MetricColumn("Seas", c?.waveHeightFt?.let { "${String.format(Locale.US, "%.1f", it)} ft" } ?: "—", c?.wavePeriodSec?.let { "${it.roundToInt()}s period" })
                 MetricColumn(
                     "Tide",
-                    c?.tideHeightFt?.let { "${String.format("%.1f", it)} ft" } ?: "Not tidal",
+                    c?.tideHeightFt?.let { "${String.format(Locale.US, "%.1f", it)} ft" } ?: "Not tidal",
                     c?.tideTrend?.label(),
                 )
                 MetricColumn("Storm", c?.thunderstormProbabilityPercent?.let { "$it%" } ?: "—", null)
@@ -257,16 +257,16 @@ private fun TideCurrentCard(assessment: BoatingWindowAssessment, zoneId: ZoneId)
             if (departure?.tideHeightFt != null) {
                 Text("Tide (prediction)", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(modifier = Modifier.height(6.dp))
-                TimelineRow("Departure", "${String.format("%.1f", departure.tideHeightFt)} ft · ${departure.tideTrend?.label() ?: "Unknown"}")
+                TimelineRow("Departure", "${String.format(Locale.US, "%.1f", departure.tideHeightFt)} ft · ${departure.tideTrend?.label() ?: "Unknown"}")
                 val nextTideEvents = listOfNotNull(
                     departure.nextHighTide?.let { "Next high" to it },
                     departure.nextLowTide?.let { "Next low" to it },
                 )
                 nextTideEvents.minByOrNull { it.second.time }?.let { (label, next) ->
-                    TimelineRow(label, "${String.format("%.1f", next.heightFt)} ft at ${formatTime(next.time, zoneId)}")
+                    TimelineRow(label, "${String.format(Locale.US, "%.1f", next.heightFt)} ft at ${formatTime(next.time, zoneId)}")
                 }
                 returnConditions?.tideHeightFt?.let {
-                    TimelineRow("Return", "${String.format("%.1f", it)} ft · ${returnConditions.tideTrend?.label() ?: "Unknown"}")
+                    TimelineRow("Return", "${String.format(Locale.US, "%.1f", it)} ft · ${returnConditions.tideTrend?.label() ?: "Unknown"}")
                 }
                 Spacer(modifier = Modifier.height(10.dp))
             }
@@ -275,7 +275,7 @@ private fun TideCurrentCard(assessment: BoatingWindowAssessment, zoneId: ZoneId)
                 Spacer(modifier = Modifier.height(6.dp))
                 TimelineRow("Departure", currentSummary(departure.currentSpeedKts, departure.currentDirectionDeg))
                 departure.nextCurrentEvent?.let { next ->
-                    TimelineRow(next.type.label(), "${formatTime(next.time, zoneId)}${if (next.type != CurrentEventType.SLACK) " · ${String.format("%.1f", next.speedKts)} kt" else ""}")
+                    TimelineRow(next.type.label(), "${formatTime(next.time, zoneId)}${if (next.type != CurrentEventType.SLACK) " · ${String.format(Locale.US, "%.1f", next.speedKts)} kt" else ""}")
                 }
                 returnConditions?.currentSpeedKts?.let {
                     TimelineRow("Return", currentSummary(it, returnConditions.currentDirectionDeg))
@@ -294,7 +294,7 @@ private fun TimelineRow(label: String, value: String) {
 }
 
 private fun currentSummary(speedKts: Double, directionDeg: Double?): String {
-    val speed = "${String.format("%.1f", speedKts)} kt"
+    val speed = "${String.format(Locale.US, "%.1f", speedKts)} kt"
     return if (directionDeg != null) "$speed @ ${directionDeg.roundToInt()}°" else speed
 }
 
@@ -400,7 +400,7 @@ private fun ObservationStationCard(station: SelectedMarineStation, comparison: O
             Spacer(modifier = Modifier.height(4.dp))
             Text(station.name ?: station.stationId, style = MaterialTheme.typography.titleMedium)
             Text(
-                "${String.format("%.0f", station.distanceNm)} NM away · observed ${station.ageMinutes} min ago (${station.freshness.label()})",
+                "${String.format(Locale.US, "%.0f", station.distanceNm)} NM away · observed ${station.ageMinutes} min ago (${station.freshness.label()})",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
