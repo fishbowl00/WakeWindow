@@ -215,14 +215,6 @@ private fun IntField(label: String, value: Int, onValueChange: (Int?) -> Unit) {
     )
 }
 
-/** The first edit away from a preset must give the draft its own real ID immediately, not just
- * flip [VesselProfile.isCustom] - otherwise a saved custom profile could end up reusing a
- * preset's `id` (a preset's `id` is simply its `name`), silently colliding with it in
- * [WakeWindowUiState.availableVessels] and in [com.wakewindow.app.data.local.VesselPreferenceStore]'s
- * by-ID lookup. A profile that's already custom keeps its existing ID across further edits. */
-private fun VesselProfile.markCustomized(): VesselProfile =
-    if (isCustom) this else withNewId().copy(isCustom = true)
-
 private fun formatNumber(value: Double): String =
     if (value == value.toLong().toDouble()) value.toLong().toString() else value.toString()
 

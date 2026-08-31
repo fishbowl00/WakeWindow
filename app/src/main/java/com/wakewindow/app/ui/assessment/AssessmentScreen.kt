@@ -256,6 +256,7 @@ private fun TideCurrentCard(assessment: BoatingWindowAssessment, zoneId: ZoneId)
         Column(modifier = Modifier.padding(16.dp)) {
             if (departure?.tideHeightFt != null) {
                 Text("Tide (prediction)", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                assessment.nearestTideStation?.let { StationAttribution(it.name, it.distanceNm) }
                 Spacer(modifier = Modifier.height(6.dp))
                 TimelineRow("Departure", "${String.format(Locale.US, "%.1f", departure.tideHeightFt)} ft · ${departure.tideTrend?.label() ?: "Unknown"}")
                 val nextTideEvents = listOfNotNull(
@@ -272,6 +273,7 @@ private fun TideCurrentCard(assessment: BoatingWindowAssessment, zoneId: ZoneId)
             }
             if (departure?.currentSpeedKts != null) {
                 Text("Current (prediction)", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                assessment.nearestCurrentStation?.let { StationAttribution(it.name, it.distanceNm) }
                 Spacer(modifier = Modifier.height(6.dp))
                 TimelineRow("Departure", currentSummary(departure.currentSpeedKts, departure.currentDirectionDeg))
                 departure.nextCurrentEvent?.let { next ->
@@ -283,6 +285,19 @@ private fun TideCurrentCard(assessment: BoatingWindowAssessment, zoneId: ZoneId)
             }
         }
     }
+}
+
+/** A tide/current prediction is a prediction *for a specific station*, not for the launch
+ * itself - see docs/DATA_SOURCES.md: "tide/current data must always be labeled with the source
+ * station's name and distance... it must never be presented as if it were measured exactly at
+ * the user's ramp." Mirrors [ObservationStationCard]'s own distance display. */
+@Composable
+private fun StationAttribution(stationName: String, distanceNm: Double) {
+    Text(
+        "$stationName · ${String.format(Locale.US, "%.0f", distanceNm)} NM away",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 @Composable

@@ -192,6 +192,8 @@ class DefaultBoatingRepository(
             disagreements = comparison?.disagreements ?: emptyList(),
             observationComparison = comparison,
             waterEnvironment = launchEnvironment,
+            nearestTideStation = tideResult.station,
+            nearestCurrentStation = currentResult.station,
         )
     }
 

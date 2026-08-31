@@ -301,6 +301,55 @@ class DefaultBoatingRepositoryTest {
         assertEquals(2.5, assessment.departureAssessment.conditions?.currentSpeedKts!!, 0.01)
         assertEquals(90.0, assessment.departureAssessment.conditions?.currentDirectionDeg)
         assertTrue(assessment.evidence.items.any { it.label.contains("current", ignoreCase = true) && it.available })
+        assertEquals("Test Inlet", assessment.nearestCurrentStation?.name)
+        assertEquals(2.0, assessment.nearestCurrentStation?.distanceNm)
+    }
+
+    @Test
+    fun `a nearby tide station's identity is carried on the assessment for provenance display`() = runBlocking {
+        val calm = calmSeries(departure.minusSeconds(3600), returnTime.plusSeconds(3600))
+        val tideStation = com.wakewindow.app.domain.tide.TideStation("8721604", "Trident Pier", location, distanceNm = 0.5, datum = "MLLW")
+        val repo = DefaultBoatingRepository(
+            generalProviders = listOf(FakeGeneralProvider(ForecastOutcome.Success(calm))),
+            marineForecastProviders = listOf(FakeMarineProvider(ForecastOutcome.Success(calm))),
+            alertProvider = FakeAlertProvider(MarineAlertOutcome.Success(emptyList())),
+            tideProvider = FakeTideProvider(stationOutcome = TideStationOutcome.Found(tideStation)),
+            observationProvider = FakeObservationProvider(MarineObservationOutcome.NoStationAvailable),
+        )
+        // FakeTideProvider always returns an empty events list, so buildAssessment finds a
+        // station but no tide height to show - this test only checks station identity survives,
+        // not the tide height itself (already covered elsewhere).
+        val assessment = repo.buildAssessment(plan())
+
+        assertEquals("Trident Pier", assessment.nearestTideStation?.name)
+        assertEquals(0.5, assessment.nearestTideStation?.distanceNm)
+    }
+
+    @Test
+    fun `tide and current stations are tracked independently - they are frequently not the same station`() = runBlocking {
+        val calm = calmSeries(departure.minusSeconds(3600), returnTime.plusSeconds(3600))
+        val tideStation = com.wakewindow.app.domain.tide.TideStation("8721604", "Trident Pier", location, distanceNm = 0.5, datum = "MLLW")
+        val floodEvent = com.wakewindow.app.domain.tide.CurrentEvent(
+            com.wakewindow.app.domain.tide.CurrentEventType.FLOOD_MAX, departure, 2.5, 90.0,
+        )
+        val repo = DefaultBoatingRepository(
+            generalProviders = listOf(FakeGeneralProvider(ForecastOutcome.Success(calm))),
+            marineForecastProviders = listOf(FakeMarineProvider(ForecastOutcome.Success(calm))),
+            alertProvider = FakeAlertProvider(MarineAlertOutcome.Success(emptyList())),
+            tideProvider = FakeTideProvider(stationOutcome = TideStationOutcome.Found(tideStation)),
+            observationProvider = FakeObservationProvider(MarineObservationOutcome.NoStationAvailable),
+            currentProvider = FakeCurrentProvider(
+                stationOutcome = com.wakewindow.app.domain.tide.CurrentStationOutcome.Found(
+                    com.wakewindow.app.domain.tide.CurrentStation("ACT1234", "Test Inlet", location, distanceNm = 2.0),
+                ),
+                events = listOf(floodEvent),
+            ),
+        )
+        val assessment = repo.buildAssessment(plan())
+
+        assertEquals("Trident Pier", assessment.nearestTideStation?.name)
+        assertEquals("Test Inlet", assessment.nearestCurrentStation?.name)
+        assertTrue(assessment.nearestTideStation?.stationId != assessment.nearestCurrentStation?.stationId)
     }
 
     // --- Provider resilience: a THROWING provider (not a well-behaved sealed Failure/Outcome)
@@ -311,6 +360,12 @@ class DefaultBoatingRepositoryTest {
         override val providerName = "ThrowingGeneral"
         override suspend fun hourlyForecast(location: GeoPoint, start: Instant, end: Instant): ForecastOutcome =
             throw RuntimeException("general provider crashed")
+    }
+
+    private class ThrowingMarineProvider : MarineForecastProvider {
+        override val providerName = "ThrowingMarine"
+        override suspend fun hourlyMarineForecast(location: GeoPoint, start: Instant, end: Instant): ForecastOutcome =
+            throw RuntimeException("marine provider crashed")
     }
 
     private class ThrowingAlertProvider : MarineAlertProvider {
@@ -338,6 +393,21 @@ class DefaultBoatingRepositoryTest {
         val repo = DefaultBoatingRepository(
             generalProviders = listOf(ThrowingGeneralProvider()),
             marineForecastProviders = listOf(FakeMarineProvider(ForecastOutcome.Success(calmMarine))),
+            alertProvider = FakeAlertProvider(MarineAlertOutcome.Success(emptyList())),
+            tideProvider = FakeTideProvider(),
+        )
+        val assessment = repo.buildAssessment(plan())
+        assertTrue(assessment.overallAssessment.category != BoatingCategory.UNAVAILABLE)
+    }
+
+    @Test
+    fun `a marine forecast provider that throws does not crash the assessment when general data is still available`() = runBlocking {
+        // Symmetric with the general-provider case above - safeCall wraps both identically, but
+        // this exercised only ForecastOutcome.Failure for marine before, never a genuine throw.
+        val calmGeneral = calmSeries(departure.minusSeconds(3600), returnTime.plusSeconds(3600))
+        val repo = DefaultBoatingRepository(
+            generalProviders = listOf(FakeGeneralProvider(ForecastOutcome.Success(calmGeneral))),
+            marineForecastProviders = listOf(ThrowingMarineProvider()),
             alertProvider = FakeAlertProvider(MarineAlertOutcome.Success(emptyList())),
             tideProvider = FakeTideProvider(),
         )

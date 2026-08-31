@@ -87,4 +87,21 @@ class VesselProfileTest {
     fun `no preset is flagged custom - only a user-saved profile is`() {
         VesselProfile.presets().forEach { preset -> assertTrue(!preset.isCustom) }
     }
+
+    @Test
+    fun `markCustomized gives an unmodified preset a fresh id distinct from every preset's own id`() {
+        VesselProfile.presets().forEach { preset ->
+            val customized = preset.markCustomized()
+            assertTrue(customized.isCustom)
+            assertTrue("customized profile from '${preset.name}' must not reuse a preset id", VesselProfile.presets().none { it.id == customized.id })
+        }
+    }
+
+    @Test
+    fun `markCustomized is a no-op for a profile that is already custom - it keeps its id`() {
+        val custom = VesselProfile.presets().first().markCustomized()
+        val markedAgain = custom.markCustomized()
+        assertEquals(custom.id, markedAgain.id)
+        assertEquals(custom, markedAgain)
+    }
 }

@@ -5,6 +5,8 @@ import com.wakewindow.app.domain.observation.MarineDisagreement
 import com.wakewindow.app.domain.observation.ObservationForecastComparison
 import com.wakewindow.app.domain.observation.SelectedMarineStation
 import com.wakewindow.app.domain.observation.WaterEnvironment
+import com.wakewindow.app.domain.tide.CurrentStation
+import com.wakewindow.app.domain.tide.TideStation
 import java.time.Instant
 
 /** Home-screen headline number/category plus the specific reasons driving it - never a
@@ -71,6 +73,17 @@ data class BoatingWindowAssessment(
      * docs/STATION_REPRESENTATIVENESS.md. UNKNOWN when the available signals didn't support a
      * confident classification. */
     val waterEnvironment: WaterEnvironment = WaterEnvironment.UNKNOWN,
+    /** The station backing the tide timeline shown for this plan, when one was found - see
+     * docs/DATA_SOURCES.md: "tide/current data must always be labeled with the source station's
+     * name and distance... it must never be presented as if it were measured exactly at the
+     * user's ramp." Kept separate from [nearestCurrentStation] because CO-OPS's nearest tide
+     * station and nearest current station for the same launch are frequently different physical
+     * stations - a single shared "the" station field would risk mislabeling one with the
+     * other's identity. Null exactly when no tide station was found in range. */
+    val nearestTideStation: TideStation? = null,
+    /** See [nearestTideStation] - null exactly when no current station was found in range (e.g.
+     * beyond [com.wakewindow.app.data.remote.coops.CoopsCurrentProvider]'s 50 NM cutoff). */
+    val nearestCurrentStation: CurrentStation? = null,
 ) {
     val allPoints: List<PointAssessment> get() =
         listOf(departureAssessment) + underwayAssessments + returnAssessment

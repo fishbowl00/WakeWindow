@@ -63,9 +63,13 @@ class WakeWindowViewModel(application: Application) : AndroidViewModel(applicati
      * saved profile reuses its ID so this genuinely updates it rather than creating a
      * duplicate.
      */
+    /** [VesselProfile.markCustomized] (not a plain `copy(isCustom = true)`) so a profile that
+     * somehow reaches here still carrying a preset's `id` (its own name) is never persisted
+     * that way - see docs/VESSEL_PROFILES.md. The editor screen already calls it on every
+     * field change, so this is a backstop, not the only place it happens. */
     fun saveVesselProfile(profile: VesselProfile) {
         viewModelScope.launch {
-            val customProfile = profile.copy(isCustom = true)
+            val customProfile = profile.markCustomized()
             vesselProfileRepository.save(customProfile)
             val custom = vesselProfileRepository.getAllCustom()
             vesselPreferenceStore.saveSelectedProfileId(customProfile.id)
@@ -104,7 +108,16 @@ class WakeWindowViewModel(application: Application) : AndroidViewModel(applicati
         if (query.isBlank()) return
         viewModelScope.launch {
             _uiState.update { it.copy(isSearching = true, searchError = null) }
-            when (val outcome = placeProvider.search(query, searchBias())) {
+            // placeProvider.search() can throw - e.g. a corrupted DurableCache entry failing to
+            // deserialize - and there's no CoroutineExceptionHandler backstopping viewModelScope,
+            // so an uncaught exception here would crash the app rather than surface a search
+            // error, matching the try/catch already around viewLaunchInfo()'s equivalent call.
+            val outcome = try {
+                placeProvider.search(query, searchBias())
+            } catch (e: Exception) {
+                PlaceSearchOutcome.Failure(e.message ?: "Search failed", e)
+            }
+            when (outcome) {
                 is PlaceSearchOutcome.Success -> _uiState.update {
                     it.copy(isSearching = false, searchResults = outcome.candidates)
                 }
@@ -225,8 +238,17 @@ class WakeWindowViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    /** Mirrors [setDepartureTime]'s own guard: a return time at or before the current departure
+     * would build a [com.wakewindow.app.domain.route.BoatingPlan] with a zero/negative duration
+     * that renders as a nonsensical "0h" outing rather than surfacing the inconsistency - see
+     * docs/PLANNING.md. Falls back to departure + 1 hour, the same minimum duration
+     * [com.wakewindow.app.domain.route.QuickPlanPresets] guarantees for every computed window. */
     fun setReturnTime(instant: Instant) {
-        _uiState.update { it.copy(returnTime = instant) }
+        _uiState.update { state ->
+            val departure = state.departureTime
+            val corrected = if (departure != null && !instant.isAfter(departure)) departure.plusSeconds(3600) else instant
+            state.copy(returnTime = corrected)
+        }
     }
 
     /** Applies a quick-plan shortcut (Morning/Afternoon/Evening/Full day) - see

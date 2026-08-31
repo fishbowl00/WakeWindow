@@ -59,6 +59,17 @@ data class VesselProfile(
      * UUIDs inline. */
     fun withNewId(): VesselProfile = copy(id = UUID.randomUUID().toString())
 
+    /** The first edit away from an unmodified preset must give the draft its own real ID
+     * immediately, not just flip [isCustom] - a preset's `id` is simply its own [name], so
+     * otherwise a saved custom profile could end up reusing a preset's `id` and silently
+     * collide with it in `WakeWindowUiState.availableVessels` and in
+     * [com.wakewindow.app.data.local.VesselPreferenceStore]'s by-ID lookup - see
+     * docs/VESSEL_PROFILES.md. A profile that's already custom keeps its existing ID across
+     * further edits. Idempotent, so it's safe to call defensively at every layer that persists
+     * a profile (the editor UI on every field change, and the repository save path as a
+     * backstop) rather than trusting a single call site to have applied it first. */
+    fun markCustomized(): VesselProfile = if (isCustom) this else withNewId().copy(isCustom = true)
+
     companion object {
         /** Sensible default recreational profile - a mid-size center-console/bowrider,
          * used until per-vessel profile selection is built. */

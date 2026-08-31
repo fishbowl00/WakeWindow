@@ -2,9 +2,11 @@ package com.wakewindow.app.data.cache
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /**
  * De-duplicates concurrent in-flight requests for the same key within a single app process -
@@ -27,8 +29,18 @@ class RequestCoalescer<T> {
         try {
             return deferred.await()
         } finally {
-            mutex.withLock {
-                if (inFlight[key] === deferred) inFlight.remove(key)
+            // NonCancellable: if the caller was cancelled while awaiting, this coroutine's own
+            // job is already cancelling - mutex.withLock only hits a real (cancellable)
+            // suspension point when the mutex is genuinely contended by another concurrent
+            // coalesce() call for a different key, at which point an already-cancelled
+            // coroutine would throw immediately and never reach inFlight.remove(), permanently
+            // leaking this entry for every future caller of the same key. Cleanup must complete
+            // regardless of the caller's own cancellation - see the kotlinx.coroutines
+            // cancellation & timeouts guide's "closing resources with finally" pattern.
+            withContext(NonCancellable) {
+                mutex.withLock {
+                    if (inFlight[key] === deferred) inFlight.remove(key)
+                }
             }
         }
     }

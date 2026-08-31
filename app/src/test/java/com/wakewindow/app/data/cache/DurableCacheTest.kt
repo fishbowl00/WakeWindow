@@ -101,6 +101,34 @@ class DurableCacheTest {
     }
 
     @Test
+    fun `a corrupted cache entry degrades to a miss instead of throwing`() = runBlocking {
+        val store = InMemoryCacheStore()
+        val now = Instant.parse("2026-08-31T12:00:00Z")
+        store.records["a"] = CacheRecord("a", "not-valid-for-this-deserializer", now, now.plus(Duration.ofMinutes(10)))
+        var fetchCount = 0
+        val result = cache(store) { now }.getOrFetch(
+            key = "a", ttl = Duration.ofMinutes(10),
+            serialize = { it },
+            deserialize = { throw IllegalArgumentException("malformed payload") },
+        ) { fetchCount++; "fresh-value" }
+        assertEquals("fresh-value", result)
+        assertEquals(1, fetchCount)
+    }
+
+    @Test
+    fun `a corrupted cache entry is deleted so it does not keep failing`() = runBlocking {
+        val store = InMemoryCacheStore()
+        val now = Instant.parse("2026-08-31T12:00:00Z")
+        store.records["a"] = CacheRecord("a", "not-valid-for-this-deserializer", now, now.plus(Duration.ofMinutes(10)))
+        cache(store) { now }.getOrFetch(
+            key = "a", ttl = Duration.ofMinutes(10),
+            serialize = { it },
+            deserialize = { throw IllegalArgumentException("malformed payload") },
+        ) { "fresh-value" }
+        assertEquals("fresh-value", store.records["a"]?.payload)
+    }
+
+    @Test
     fun `invalidate removes a cached entry so the next call is a real miss`() = runBlocking {
         val store = InMemoryCacheStore()
         val now = Instant.parse("2026-08-31T12:00:00Z")

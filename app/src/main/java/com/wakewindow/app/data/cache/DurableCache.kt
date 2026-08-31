@@ -59,7 +59,16 @@ class DurableCache(
         val nowInstant = now()
         val cached = store.get(key)
         if (cached != null && cached.expiresAt.isAfter(nowInstant)) {
-            return deserialize(cached.payload)
+            // A malformed/corrupted payload (a schema change, a hand-edited row, disk
+            // corruption) must degrade to a cache miss, not an uncaught exception - callers
+            // like WakeWindowViewModel.search() have no CoroutineExceptionHandler to catch this
+            // otherwise. The bad row is deleted so it doesn't keep failing every call until it
+            // naturally expires.
+            try {
+                return deserialize(cached.payload)
+            } catch (e: Exception) {
+                store.delete(key)
+            }
         }
         return try {
             val fresh = fetch()

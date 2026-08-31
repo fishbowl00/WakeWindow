@@ -1,8 +1,11 @@
 package com.wakewindow.app.data.cache
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import java.util.concurrent.atomic.AtomicInteger
@@ -44,6 +47,34 @@ class RequestCoalescerTest {
 
         assertEquals("a", first.await())
         assertEquals("b", second.await())
+        assertEquals(2, fetchCount.get())
+    }
+
+    @Test
+    fun `cancelling an awaiting caller still removes the entry - no permanent leak`() = runBlocking {
+        // A leaked entry would leave every future caller for this key awaiting an already-
+        // completed (cancelled) Deferred forever - see docs/CACHE_POLICY.md "Request coalescing"
+        // and RequestCoalescer.coalesce()'s cleanup comment on why it runs under NonCancellable.
+        val coalescer = RequestCoalescer<String>()
+        val fetchCount = AtomicInteger(0)
+        val fetchStarted = CompletableDeferred<Unit>()
+
+        val cancelledCaller = launch {
+            coalescer.coalesce("leak-key", this) {
+                fetchCount.incrementAndGet()
+                fetchStarted.complete(Unit)
+                delay(500)
+                "first-result"
+            }
+        }
+        fetchStarted.await()
+        cancelledCaller.cancel()
+        cancelledCaller.join()
+
+        val second = withTimeout(2000) {
+            coalescer.coalesce("leak-key", this) { fetchCount.incrementAndGet(); "second-result" }
+        }
+        assertEquals("second-result", second)
         assertEquals(2, fetchCount.get())
     }
 
