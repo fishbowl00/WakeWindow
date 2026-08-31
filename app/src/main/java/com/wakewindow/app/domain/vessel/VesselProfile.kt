@@ -86,7 +86,7 @@ data class VesselProfile(
          * that. Never overrides an active marine warning gate - see [MarineAlert].
          */
         fun presets(): List<VesselProfile> = listOf(
-            default().copy(name = "Small recreational boat", vesselType = VesselType.BOWRIDER, lengthFt = 18.0),
+            default().copy(name = "Small recreational boat", id = "Small recreational boat", vesselType = VesselType.BOWRIDER, lengthFt = 18.0),
             VesselProfile(
                 name = "Center console",
                 vesselType = VesselType.SMALL_CENTER_CONSOLE,

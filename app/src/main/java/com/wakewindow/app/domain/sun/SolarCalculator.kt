@@ -89,7 +89,20 @@ object SolarCalculator {
         val localMeanTime = hHours + raHours - (0.06571 * t) - 6.622
         val utHours = normalizeHours(localMeanTime - lngHour)
 
-        val utcMidnight = date.atStartOfDay(ZoneOffset.UTC).toInstant()
+        // utHours is only a time-of-day in UTC; it doesn't by itself say which UTC calendar
+        // day the event falls on. For a longitude far enough from the Greenwich meridian, the
+        // event's *local* calendar day (approximated via lngHour, the same solar-time offset
+        // used throughout this algorithm) can land a day before or after `date`'s own UTC day -
+        // most visibly for evening events west of Greenwich, which routinely occur after UTC
+        // midnight. Shift the anchor day so the returned instant's approximate local day matches
+        // `date`, the day the caller asked for.
+        val approxLocalHour = utHours + lngHour
+        val dayShift = when {
+            approxLocalHour < 0.0 -> 1L
+            approxLocalHour >= 24.0 -> -1L
+            else -> 0L
+        }
+        val utcMidnight = date.plusDays(dayShift).atStartOfDay(ZoneOffset.UTC).toInstant()
         return utcMidnight.plusSeconds((utHours * 3600.0).roundToLong())
     }
 

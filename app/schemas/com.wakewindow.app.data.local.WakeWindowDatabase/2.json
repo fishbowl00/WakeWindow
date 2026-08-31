@@ -1,0 +1,248 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 2,
+    "identityHash": "6a73d377a669b21453b8f0b56f06c9e9",
+    "entities": [
+      {
+        "tableName": "saved_launch",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `latitude` REAL NOT NULL, `longitude` REAL NOT NULL, `address` TEXT, `placeType` TEXT NOT NULL, `isFavorite` INTEGER NOT NULL, `savedAtEpochMillis` INTEGER NOT NULL, `lastDepartureHourOfDay` INTEGER, `lastDurationMinutes` INTEGER, `lastVesselProfileId` TEXT, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "latitude",
+            "columnName": "latitude",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "longitude",
+            "columnName": "longitude",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "address",
+            "columnName": "address",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "placeType",
+            "columnName": "placeType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isFavorite",
+            "columnName": "isFavorite",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "savedAtEpochMillis",
+            "columnName": "savedAtEpochMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastDepartureHourOfDay",
+            "columnName": "lastDepartureHourOfDay",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "lastDurationMinutes",
+            "columnName": "lastDurationMinutes",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "lastVesselProfileId",
+            "columnName": "lastVesselProfileId",
+            "affinity": "TEXT",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "vessel_profile",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `vesselType` TEXT NOT NULL, `lengthFt` REAL, `beamFt` REAL, `draftFt` REAL, `propulsionType` TEXT, `cruiseSpeedKts` REAL, `windToleranceKts` REAL NOT NULL, `gustToleranceKts` REAL NOT NULL, `waveToleranceFt` REAL NOT NULL, `thunderstormTolerancePercent` INTEGER NOT NULL, `visibilityToleranceNm` REAL NOT NULL, `isSmallCraft` INTEGER NOT NULL, `notes` TEXT, `createdAtEpochMillis` INTEGER NOT NULL, `updatedAtEpochMillis` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "vesselType",
+            "columnName": "vesselType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lengthFt",
+            "columnName": "lengthFt",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "beamFt",
+            "columnName": "beamFt",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "draftFt",
+            "columnName": "draftFt",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "propulsionType",
+            "columnName": "propulsionType",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "cruiseSpeedKts",
+            "columnName": "cruiseSpeedKts",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "windToleranceKts",
+            "columnName": "windToleranceKts",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gustToleranceKts",
+            "columnName": "gustToleranceKts",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "waveToleranceFt",
+            "columnName": "waveToleranceFt",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "thunderstormTolerancePercent",
+            "columnName": "thunderstormTolerancePercent",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "visibilityToleranceNm",
+            "columnName": "visibilityToleranceNm",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isSmallCraft",
+            "columnName": "isSmallCraft",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "notes",
+            "columnName": "notes",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "createdAtEpochMillis",
+            "columnName": "createdAtEpochMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtEpochMillis",
+            "columnName": "updatedAtEpochMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "cache_entry",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`key` TEXT NOT NULL, `payload` TEXT NOT NULL, `fetchedAtEpochMillis` INTEGER NOT NULL, `expiresAtEpochMillis` INTEGER NOT NULL, PRIMARY KEY(`key`))",
+        "fields": [
+          {
+            "fieldPath": "key",
+            "columnName": "key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "payload",
+            "columnName": "payload",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fetchedAtEpochMillis",
+            "columnName": "fetchedAtEpochMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "expiresAtEpochMillis",
+            "columnName": "expiresAtEpochMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "key"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      }
+    ],
+    "views": [],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '6a73d377a669b21453b8f0b56f06c9e9')"
+    ]
+  }
+}
