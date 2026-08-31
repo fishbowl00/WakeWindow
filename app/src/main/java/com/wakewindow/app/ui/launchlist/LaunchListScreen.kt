@@ -169,10 +169,32 @@ private fun LaunchCard(launch: SavedLaunch, onClick: () -> Unit, onInfoClick: ()
                 launch.place.discovery.address?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+                lastPlanSummary(launch)?.let {
+                    Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
+                }
             }
             IconButton(onClick = onInfoClick) {
                 Icon(Icons.Filled.Info, contentDescription = "Launch information for ${launch.place.name}", tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
+}
+
+/** "Usually 7 AM · 6h" - a real proxy for "faster the second time" (see
+ * [com.wakewindow.app.domain.place.SavedLaunch] "Recent plans") without auto-firing a full
+ * multi-provider assessment for every saved launch just because Home opened - that's real,
+ * avoidable network cost the sprint brief explicitly warns against. Null until this launch has
+ * ever actually been planned. */
+private fun lastPlanSummary(launch: SavedLaunch): String? {
+    val hour = launch.lastDepartureHourOfDay ?: return null
+    val minutes = launch.lastDurationMinutes ?: return null
+    val hour12 = when {
+        hour == 0 -> 12
+        hour > 12 -> hour - 12
+        else -> hour
+    }
+    val meridiem = if (hour < 12) "AM" else "PM"
+    val durationHours = minutes / 60
+    val durationLabel = if (minutes % 60 == 0L) "${durationHours}h" else "${durationHours}h ${minutes % 60}m"
+    return "Usually $hour12 $meridiem · $durationLabel"
 }

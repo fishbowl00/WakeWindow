@@ -22,6 +22,9 @@ object SavedLaunchMapper {
         ),
         isFavorite = entity.isFavorite,
         savedAtEpochMillis = entity.savedAtEpochMillis,
+        lastDepartureHourOfDay = entity.lastDepartureHourOfDay,
+        lastDurationMinutes = entity.lastDurationMinutes,
+        lastVesselProfileId = entity.lastVesselProfileId,
     )
 
     fun toEntity(launch: SavedLaunch): SavedLaunchEntity = SavedLaunchEntity(
@@ -33,5 +36,8 @@ object SavedLaunchMapper {
         placeType = launch.place.type.name,
         isFavorite = launch.isFavorite,
         savedAtEpochMillis = launch.savedAtEpochMillis,
+        lastDepartureHourOfDay = launch.lastDepartureHourOfDay,
+        lastDurationMinutes = launch.lastDurationMinutes,
+        lastVesselProfileId = launch.lastVesselProfileId,
     )
 }

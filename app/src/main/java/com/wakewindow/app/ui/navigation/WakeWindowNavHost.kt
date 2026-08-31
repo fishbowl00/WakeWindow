@@ -15,6 +15,7 @@ import com.wakewindow.app.ui.launchlist.LaunchListScreen
 import com.wakewindow.app.ui.launchsearch.LaunchSearchScreen
 import com.wakewindow.app.ui.planboat.PlanBoatScreen
 import com.wakewindow.app.ui.settings.SettingsScreen
+import com.wakewindow.app.ui.vessel.VesselProfileScreen
 
 @Composable
 fun WakeWindowNavHost(
@@ -60,7 +61,18 @@ fun WakeWindowNavHost(
                 onDepartureChange = viewModel::setDepartureTime,
                 onReturnChange = viewModel::setReturnTime,
                 onVesselChange = viewModel::setVessel,
+                onEditVessel = { navController.navigate(WakeWindowDestinations.VESSEL) },
+                onQuickPlan = viewModel::applyQuickPlan,
                 onShowConditions = { navController.navigate(WakeWindowDestinations.ASSESSMENT) },
+                onBack = { navController.popBackStack() },
+            )
+        }
+        composable(WakeWindowDestinations.VESSEL) {
+            VesselProfileScreen(
+                state = state,
+                onSelectVessel = viewModel::setVessel,
+                onSaveProfile = viewModel::saveVesselProfile,
+                onDeleteProfile = viewModel::deleteVesselProfile,
                 onBack = { navController.popBackStack() },
             )
         }
@@ -72,9 +84,7 @@ fun WakeWindowNavHost(
             )
         }
         composable(WakeWindowDestinations.LAUNCH_INFO) {
-            state.infoLaunch?.let { launch ->
-                LaunchInfoScreen(place = launch.place, onBack = { navController.popBackStack() })
-            }
+            LaunchInfoScreen(state = state, onBack = { navController.popBackStack() })
         }
         composable(WakeWindowDestinations.SETTINGS) {
             SettingsScreen(onBack = { navController.popBackStack() })

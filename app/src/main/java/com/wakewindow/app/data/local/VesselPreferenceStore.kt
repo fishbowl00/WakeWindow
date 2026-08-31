@@ -4,28 +4,35 @@ import android.content.Context
 import com.wakewindow.app.domain.vessel.VesselProfile
 
 /**
- * Persists which vessel preset the user last picked - a plain SharedPreferences value rather
- * than a new Room entity/migration, since it's a single scalar (a preset name) for a
- * single-user app, matching [com.wakewindow.app.domain.settings.AppSettings]'s own
- * single-record rationale. See docs/ROADMAP.md "Vessel profiles."
+ * Persists which vessel profile - preset or user-saved custom - is currently active, as a
+ * plain SharedPreferences scalar (an ID) rather than a Room column, matching
+ * [com.wakewindow.app.domain.settings.AppSettings]'s own single-record rationale. See
+ * docs/VESSEL_PROFILES.md. The full custom-profile records themselves live in Room
+ * ([com.wakewindow.app.data.local.VesselProfileEntity]) - this store only remembers *which one*
+ * (by [VesselProfile.id], which for a preset is simply its name) is selected.
  */
 class VesselPreferenceStore(context: Context) {
 
     private val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    /** Null when nothing has been chosen yet, or the stored name no longer matches a known
-     * preset (e.g. after a preset list change) - callers fall back to [VesselProfile.default]. */
-    fun loadSelectedPreset(): VesselProfile? {
-        val name = prefs.getString(KEY_SELECTED_PRESET_NAME, null) ?: return null
-        return VesselProfile.presets().firstOrNull { it.name == name }
+    /** Null when nothing has been chosen yet - callers fall back to [VesselProfile.default]. */
+    fun loadSelectedProfileId(): String? = prefs.getString(KEY_SELECTED_PROFILE_ID, null)
+
+    fun saveSelectedProfileId(id: String) {
+        prefs.edit().putString(KEY_SELECTED_PROFILE_ID, id).apply()
     }
 
-    fun saveSelectedPreset(profile: VesselProfile) {
-        prefs.edit().putString(KEY_SELECTED_PRESET_NAME, profile.name).apply()
+    /** Convenience for the common case: resolve the previously-selected ID against the full
+     * available set (presets + saved custom profiles), falling back to [VesselProfile.default]
+     * if nothing was selected yet or the selected ID no longer matches anything (e.g. a custom
+     * profile that was since deleted). */
+    fun loadSelectedProfile(customProfiles: List<VesselProfile>): VesselProfile {
+        val id = loadSelectedProfileId() ?: return VesselProfile.default()
+        return (VesselProfile.presets() + customProfiles).firstOrNull { it.id == id } ?: VesselProfile.default()
     }
 
     companion object {
         private const val PREFS_NAME = "wakewindow_vessel_prefs"
-        private const val KEY_SELECTED_PRESET_NAME = "selected_preset_name"
+        private const val KEY_SELECTED_PROFILE_ID = "selected_profile_id"
     }
 }

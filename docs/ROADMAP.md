@@ -73,28 +73,88 @@ actually represents the user's boating environment? Shipped:
    Advisory entries for one nine-hour outing) found and fixed *during* this live
    re-validation, not before it. See [ASSESSMENT_VALIDATION.md](ASSESSMENT_VALIDATION.md).
 
+## Sprint 4 — productization: launch intelligence, vessel personalization, planning UX, scale hardening (complete, with honest gaps)
+
+Goal: move WakeWindow from "excellent technical prototype" toward something a real boat owner
+would trust on a Saturday morning. **This sprint ran in an online Claude Code environment with
+no outbound network access to any provider host or to Android's/Google's Maven repository** —
+see the sprint report for the full account. No build, test run, or live provider validation
+could be performed; every change below is implemented and reasoned through at the source level,
+not verified by a green build. That verification is the mandatory first step of whatever comes
+next. Shipped (pending that verification):
+
+1. **Real FWC facility intelligence** — `FwcFacilityInfoProvider`, the first real
+   `MarineFacilityInfoProvider`, wiring `TotalLanes`, `ContactPhone`, `RampType`, `AccessType`,
+   `Amenities`, `WaterBodyName`, and a classified `Status` through into `MarineFacilityInfo`,
+   with provenance (`SourceReference.recordId` = FWC's `OBJECTID`) and a 7-day durable cache —
+   see [DATA_SOURCES.md](DATA_SOURCES.md). `LaunchInfoScreen` redesigned into
+   Access/Facilities/Contact/Location/Source sections with compact known-fact chips and
+   collapsed-by-default unknown fields.
+2. **Boating-centric search** — three-tier ranking (source authority, then place-type boating
+   relevance, then proximity), location bias from the active/last-saved launch (no device GPS
+   permission required or requested), and generalized cross-source duplicate reconciliation
+   (FWC/USACE/Photon, not just geocoding-vs-authoritative) — see
+   [PLACE_DISCOVERY.md](PLACE_DISCOVERY.md).
+3. **Custom vessel profiles** — `VesselProfileScreen`, Room-backed multi-profile persistence,
+   explicit "planning preferences/comfort thresholds, never safe limits" language throughout —
+   see [VESSEL_PROFILES.md](VESSEL_PROFILES.md) and [MARINE_SCORING.md](MARINE_SCORING.md).
+4. **Planning UX** — quick-plan shortcuts (Morning/Afternoon/Evening/Full day) driven by real
+   local sunrise/sunset where available, a plan-summary card, a whole-outing tide/current
+   timeline (explicitly labeled "prediction"), and "usually 7 AM · 6h" recall on saved launches
+   from the last plan actually run there — see [PLANNING.md](PLANNING.md).
+5. **Sunrise/sunset/civil twilight** — `SolarCalculator`, a pure-Kotlin closed-form
+   approximation, no new dependency or paid API — see [PLANNING.md](PLANNING.md) for its
+   verification caveat (qualitative tests only; no live network to check against a real
+   almanac this sprint).
+6. **Mode B foundation, domain only** — `MarineTripPlan`/`PlanningWaypoint`/`TripLegEstimator`,
+   explicitly non-navigation language throughout, geodesic "planning distance," graceful
+   ETA degradation with no cruise speed — see [TRIP_PLANNING.md](TRIP_PLANNING.md). No UI ships
+   this sprint, and per-waypoint weather fetching is not wired into
+   `DefaultBoatingRepository` — both are honest, explicit gaps.
+7. **Durable cache + request coalescing** — `DurableCache`/`RequestCoalescer`
+   (`data/cache/`), wired into FWC facility lookups and place search; the full weather/alert/
+   tide fan-out is deliberately **not** cached yet — see [CACHE_POLICY.md](CACHE_POLICY.md) for
+   exactly what's wired vs. documented-only and why (alerts specifically need their own
+   staleness review before caching, not a default TTL).
+8. **Provider resilience** — new tests proving a *throwing* provider (not just a well-behaved
+   `Failure` outcome) never crashes the assessment, individually and with every provider
+   throwing simultaneously (`DefaultBoatingRepositoryTest`).
+9. **Open-Meteo structurally removable** — `AppDependencies.boatingRepository(includeOpenMeteo
+   = false)` builds an NWS-only configuration; existing single-provider fake-based tests are the
+   regression coverage proving it still produces a real assessment — see
+   [DATA_SOURCES.md](DATA_SOURCES.md) "Remove structural Open-Meteo dependency."
+10. **Production geocoder decision record** — Photon stays the development/fallback geocoder,
+    unchanged; a real replacement evaluation needs network access this session didn't have, and
+    committing to a paid vendor without that verification (or the user's sign-off on a
+    cost-bearing dependency) was explicitly out of scope — see [DATA_SOURCES.md](DATA_SOURCES.md).
+
+**Not attempted, or only partially, and why:** device UX validation (no physical device/
+emulator in this environment — see the sprint report); USACE facility-data re-investigation (no
+network access to inspect further live services); a full "GOOD TODAY" Home-screen condition
+badge per saved launch (would need either durable serialization of the full assessment graph or
+a user-triggered-refresh design — descoped to the lighter "usually 7 AM · 6h" recall instead,
+which needed neither); broad accessibility/UI-polish audit beyond the screens directly touched
+this sprint.
+
 ## Next sprint (highest-value follow-on)
 
-1. **A real facility-intelligence source** for `MarineFacilityInfoProvider` — Florida FWC's own
-   boat ramp data already includes richer per-ramp fields (`RampType`, `TotalLanes`,
-   `Amenities`, `ContactPhone`) that Sprint 3's discovery integration currently discards down
-   to a bare `MarinePlaceCandidate` — wiring FWC in as a genuine `MarineFacilityInfoProvider`
-   for Florida launches specifically is a concrete, scoped starting point (see
-   [PLACE_DISCOVERY.md](PLACE_DISCOVERY.md)), rather than a general-purpose scraper.
-2. **Bias/location-scoped place search** — `MarinePlaceProvider.search()` already accepts an
-   optional `bias: GeoPoint?`, but the search UI never supplies one; wiring the user's
-   last-known or currently-viewed location through would let FWC/USACE narrow by proximity
-   instead of text-matching the whole dataset.
-3. **Real-time current *observations*** (PORTS-equipped stations), distinct from the
-   predictions-only implementation shipped this sprint.
-4. Editable, custom vessel profiles beyond the five built-in presets.
-5. A real caching layer around `DefaultBoatingRepository.buildAssessment()` (see "Scale and
-   Provider Risk" below) — currently every call fans out to every provider fresh, and Sprint 3
-   added more providers to that fan-out (current stations, station-local re-fetch for
-   comparison, FWC/USACE search).
-6. Expand automated test coverage around real-world edge cases as they're found on-device
-   (DST transitions, provider outages during a live session, more inland/sparse-data
-   locations beyond the two cases validated so far).
+1. **Get a real build and test run.** Nothing above has been compiled or executed this sprint —
+   see the sprint report. This is the mandatory first step before any of the following.
+2. **Live provider validation** — Port Canaveral, a second Florida ramp-rich area, Clinton Lake
+   KS, and a sparse-data location, re-run against everything Sprint 4 touched (FWC facility
+   fields especially — the three newly-added field names were never re-verified live).
+3. **Physical-device / emulator UX pass** — the original Sprint 4 brief's first task (a Razr
+   Ultra device audit) never happened; do it before further UI work, not after.
+4. Wire `TripLegEstimator.routeSamples()` into a real per-location weather fetch and build a
+   minimal Mode B screen once the domain layer has been validated against a real build.
+5. Extend `DurableCache` to the weather/tide/current fan-out per the TTL table already
+   documented in [CACHE_POLICY.md](CACHE_POLICY.md), with alerts getting their own careful
+   staleness review first.
+6. Real-time current *observations* (PORTS-equipped stations), distinct from the
+   predictions-only implementation shipped in Sprint 3.
+7. A genuine paid-geocoder evaluation (Geoapify/LocationIQ/Mapbox or similar) once network
+   access allows checking real current terms, plus the user's sign-off on any cost-bearing
+   dependency.
 
 ## Launch intelligence — deliberately not a web scraper
 
@@ -142,27 +202,34 @@ individual-provider level** — see "Caching" in [ARCHITECTURE.md](ARCHITECTURE.
 | ~5,000 | Duplicate/redundant API requests | Two people planning the same popular launch (e.g. Port Canaveral) at the same time each trigger a full independent fetch — no request de-duplication or shared cache exists across users, only RideCast-style per-coordinate caches scoped to a single app process. This is the most likely first real problem. |
 | ~10,000 | NWS usage etiquette; CO-OPS station-list bandwidth | NWS has no hard published quota but does ask for good-citizen behavior (descriptive `User-Agent`, avoid unnecessary repeated calls) — at this volume WakeWindow should be able to show it isn't hammering `api.weather.gov` per-device with zero server-side aggregation. The CO-OPS ~3,500-station list (fetched once per process, ~2 MB) becomes a real aggregate bandwidth cost multiplied across many fresh app installs/updates. |
 
-**What this sprint deliberately does not do about it:** build a backend, a shared cache
-server, or request-coalescing infrastructure. That's real infrastructure work that isn't
-justified before there's a real user base to serve — premature backend investment here would
-be exactly the "architectural theatre" this roadmap's own opening paragraph warns against. The
-concrete first fix, when it's warranted, is straightforward: a durable (Room-backed),
-location-keyed cache with a TTL suited to each data type's real freshness needs (RideCast's own
-three-tier decorator pattern is the template — see [ARCHITECTURE.md](ARCHITECTURE.md)
-"Caching"), plus swapping Photon for a production-appropriate geocoder before any real launch.
+**Still not built:** a backend or a shared/cross-device cache server - that's real
+infrastructure work that isn't justified before there's a real user base to serve, and would
+be exactly the "architectural theatre" this roadmap's own opening paragraph warns against.
+**Built in Sprint 4:** a process-local durable (Room-backed) cache and in-process request
+coalescing (`data/cache/DurableCache`/`RequestCoalescer`) - see
+[CACHE_POLICY.md](CACHE_POLICY.md) for exactly which data is wired through it (FWC facility
+info, place search) versus still fetched fresh every time (the weather/tide/current/alert
+fan-out) and why. This addresses the "two people planning Port Canaveral on two different
+devices" case not at all (that needs a shared backend, still out of scope) but does address
+"the same device re-fetching the same thing repeatedly," which was the more immediate,
+per-process cost. Swapping Photon for a production-appropriate geocoder before any real launch
+remains unresolved - see [DATA_SOURCES.md](DATA_SOURCES.md) "Production geocoder decision
+record."
 
 ## Architected now, intentionally not built
 
 These are structurally supported (interfaces, domain seams, nullable models) so they are
 additive later rather than requiring rework, but are explicitly out of scope so far:
 
-- Port-to-port / trip planning (Mode B) beyond manual waypoints.
+- Port-to-port / trip planning (Mode B) UI, and weather fetched per-waypoint - the domain
+  model itself (`MarineTripPlan`, manual waypoints, planning-distance/ETA estimation) shipped
+  in Sprint 4; see [TRIP_PLANNING.md](TRIP_PLANNING.md) for exactly what's still missing.
 - Route-aware marine weather along a real charted course.
 - Tidal-current effects on a planned route.
 - Multi-day boating outlook (beyond a single day's hourly assessment).
-- Editable, saved custom vessel profiles beyond the five built-in presets shipped in Sprint 3.
 - Fuel-range planning.
-- Sunrise/sunset and moon phase display.
+- Moon phase display (sunrise/sunset/civil twilight shipped in Sprint 4 - see
+  [PLANNING.md](PLANNING.md)).
 - Fishing-specific mode; paddle/PWC-specific profiles.
 - Marine radar overlay.
 - Lightning-proximity detection.

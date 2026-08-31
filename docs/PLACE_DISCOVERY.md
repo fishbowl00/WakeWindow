@@ -39,24 +39,61 @@ showing the same lake five times.
 ## Ranking
 
 `CompositeMarinePlaceProvider` fans out to every configured `boatingSources` provider plus the
-`fallback` (Photon) concurrently, then:
+`fallback` (Photon) concurrently, deduplicates (see below), then ranks three-tiered:
 
-1. Concatenates all `boatingSources` results first, `fallback` results last -
-   `FWC_BOAT_RAMP` and `USACE_RECREATION_AREA` always rank ahead of `GEOCODING`, regardless of
-   fetch order or how the individual providers internally order their own results.
-2. Drops any `GEOCODING` candidate within 0.25 NM of an authoritative-source candidate, treating
-   it as the same real-world place rather than showing a ramp twice under two different names/
-   sources.
-3. Reports the whole search as failed only when **every** configured source failed - one dead
-   source alongside others that succeeded (even with zero results) is not a search failure, the
-   same permissive-fan-out pattern `DefaultBoatingRepository` already uses for weather
-   providers.
+1. **Source authority** - `FWC_BOAT_RAMP` and `USACE_RECREATION_AREA` always rank ahead of
+   `GEOCODING`, regardless of fetch order, how the individual providers order their own
+   results, or physical proximity - an exact named ramp is never buried under a physically
+   closer but unverified geocoder match.
+2. **Boating relevance of the place type**, within a tier - `BOAT_RAMP` > `MARINA` >
+   `HARBOR`/`PORT` > `DOCK`/`ANCHORAGE`/`YACHT_CLUB` > `OTHER` (Sprint 4). This mostly matters
+   within the `GEOCODING` tier, since FWC only ever yields `BOAT_RAMP` and USACE only ever
+   yields `OTHER`.
+3. **Proximity to an optional `bias` point**, only within the same tier and type (Sprint 4) -
+   see "Location bias" below. With no bias, this tier is a no-op and relative order is
+   unaffected, exactly as before Sprint 4.
 
-Confirmed live (see [ASSESSMENT_VALIDATION.md](ASSESSMENT_VALIDATION.md)): a search for "Port
-Canaveral" ranks the real FWC boat ramp first, ahead of seven Photon matches including an
-unrelated result in British Columbia; a search for "Clinton Lake" ranks the real USACE
-recreation area first, ahead of four Photon matches for different "Clinton Lake"s in other
-states.
+Reports the whole search as failed only when **every** configured source failed - one dead
+source alongside others that succeeded (even with zero results) is not a search failure, the
+same permissive-fan-out pattern `DefaultBoatingRepository` already uses for weather providers.
+
+Confirmed live in Sprint 3 (see [ASSESSMENT_VALIDATION.md](ASSESSMENT_VALIDATION.md), not
+re-verified live in Sprint 4 - this session's environment has no outbound network access, see
+the sprint report): a search for "Port Canaveral" ranks the real FWC boat ramp first, ahead of
+seven Photon matches including an unrelated result in British Columbia; a search for "Clinton
+Lake" ranks the real USACE recreation area first, ahead of four Photon matches for different
+"Clinton Lake"s in other states.
+
+## Location bias (Sprint 4)
+
+`MarinePlaceProvider.search()` always accepted an optional `bias: GeoPoint?`, but nothing
+supplied one until this sprint. `WakeWindowViewModel.searchBias()` now resolves it from the
+currently-active plan's launch, or otherwise the most recently saved launch - **never** device
+GPS location. Device/GPS bias was deliberately not implemented this sprint: it would need a new
+location-services dependency (Google Play Services `FusedLocationProvider` or similar,
+currently not a project dependency - see `CLAUDE.md`'s "don't add a dependency unless the
+current task actually needs it") and a runtime-permission flow that this session has no way to
+verify without a physical device or emulator. A saved-launch-derived bias needs neither, and is
+explicitly listed as an acceptable alternative in the sprint brief ("previous/saved-launch
+region bias"). With zero saved launches, search remains unbiased text relevance only, exactly
+as before - **location bias is never required to search.**
+
+## Duplicate reconciliation (Sprint 4: generalized beyond geocoding)
+
+Sprint 3's dedup only ever dropped a `GEOCODING` candidate that landed within 0.25 NM of an
+authoritative-source candidate. `CompositeMarinePlaceProvider.dedupe()` generalizes this: any
+candidate within 0.25 NM of an *already-kept, differently-sourced* candidate is dropped,
+regardless of which two sources they came from - so FWC and USACE describing the same physical
+site (a real possibility, not yet observed live) also collapses to one result, keeping
+whichever source ranks higher. **Deliberately never applied within a single source's own
+results** - two genuinely distinct ramps from the same authoritative inventory sitting close
+together (e.g. two launches at one park) must never collapse into one just because that
+source's own data places them near each other; this is the "don't overmerge unrelated
+facilities that happen to sit beside each other" caution the sprint brief calls out explicitly.
+Name-based matching (beyond distance) was considered and deliberately not added this sprint -
+without live data to tune a normalized-name-similarity threshold against, a distance-only rule
+stays the conservative, defensible choice; loosening it to also require name overlap (making it
+*more* conservative, not less) is a reasonable follow-up once real duplicate cases are observed.
 
 ## UI honesty
 
@@ -69,10 +106,11 @@ the same visual confidence as a government inventory match.
 ## What this is not
 
 This is still place *discovery* (name, coordinates, address, a type claim with honest
-provenance) - it is not [`MarineFacilityInfo`](DATA_SOURCES.md) (ramp fees, VHF channel, gate
-hours, lane count). `MarineFacilityInfoProvider` remains unimplemented; FWC's own data actually
-includes richer per-ramp fields (`RampType`, `AccessType`, `TotalLanes`, `Amenities`,
-`ContactPhone`, fee info) that `FwcMapper` currently discards down to a `MarinePlaceCandidate` -
-a real, scoped opportunity for a future sprint to wire FWC in as a genuine
-`MarineFacilityInfoProvider` for Florida launches specifically, without needing a general-purpose
-scraper.
+provenance) - it is not, by itself, [`MarineFacilityInfo`](DATA_SOURCES.md) (ramp fees, VHF
+channel, gate hours, lane count). As of Sprint 4, `FwcFacilityInfoProvider` is a real
+`MarineFacilityInfoProvider` implementation for Florida FWC boat ramps specifically (see
+[DATA_SOURCES.md](DATA_SOURCES.md) "Sprint 4 — `FwcFacilityInfoProvider`") - a search result's
+`MarinePlaceCandidate.sourceId` (FWC's `OBJECTID`, when present) is what lets `LaunchInfoScreen`
+re-fetch that facility record. USACE and Photon results still carry no facility intelligence;
+`FwcFacilityInfoProvider` honestly reports `NoDataAvailable` for anything that didn't come from
+`FWC_BOAT_RAMP`, never a guess.

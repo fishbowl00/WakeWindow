@@ -46,11 +46,14 @@ com.wakewindow.app
 │   │                              ObservationFreshness, MarineDisagreement(Detector),
 │   │                              WaterEnvironment(Classifier), WaterPointTypeProvider,
 │   │                              StationRepresentativeness(Evaluator), ObservationForecastComparison
-│   ├── place/                  — MarinePlace, MarineFacilityInfo (+ FacilityAvailability),
-│   │                              MarinePlaceProvider, PlaceSourceType,
-│   │                              MarineFacilityInfoProvider (no impl yet), SavedLaunch(Repository)
-│   ├── vessel/                 — VesselProfile, VesselType, presets
-│   ├── route/                  — RouteSample, RouteSampleRole, BoatingPlan, BoatingRepository
+│   ├── place/                  — MarinePlace, MarineFacilityInfo (+ FacilityAvailability,
+│   │                              FacilityOperationalStatus), MarinePlaceProvider,
+│   │                              PlaceSourceType, MarineFacilityInfoProvider, SavedLaunch(Repository)
+│   ├── vessel/                 — VesselProfile, VesselType, presets, VesselProfileRepository
+│   ├── route/                  — RouteSample, RouteSampleRole, BoatingPlan, BoatingRepository,
+│   │                              QuickPlanKind/QuickPlanPresets
+│   ├── trip/                   — MarineTripPlan, PlanningWaypoint, TripLeg, TripLegEstimator (Mode B, domain-only - see TRIP_PLANNING.md)
+│   ├── sun/                    — SolarCalculator (sunrise/sunset/civil twilight - see PLANNING.md)
 │   ├── consensus/               — multi-provider merge for MarineConditions
 │   ├── scoring/                 — BoatingCategory, Hazard, PointAssessment,
 │   │                              BoatingWindowAssessment, BestWindow, ConfidenceEvidence,
@@ -63,23 +66,28 @@ com.wakewindow.app
 │   │   ├── openmeteo/           — general + marine (dev-only, license-gated - see DATA_SOURCES.md)
 │   │   ├── coops/                — NOAA CO-OPS tide + current predictions, station metadata
 │   │   ├── ndbc/                 — NOAA NDBC buoy observations: parser, station selector/directory, provider
-│   │   ├── fwc/                   — Florida FWC boat ramp inventory (place discovery)
+│   │   ├── fwc/                   — Florida FWC boat ramp inventory (place discovery) + FwcFacilityInfoProvider (launch intelligence)
 │   │   ├── usace/                 — USACE recreation-area parcels (place discovery)
 │   │   └── photon/               — keyless place search (fallback)
-│   ├── place/                    — CompositeMarinePlaceProvider (fan-out + rank + dedup across sources)
-│   ├── local/                    — Room: SavedLaunchEntity; SharedPreferences: VesselPreferenceStore
-│   ├── mapper/                   — DTO → domain, one file per provider
+│   ├── place/                    — CompositeMarinePlaceProvider (fan-out + rank + dedup across sources),
+│   │                                CachedMarinePlaceProvider (durable cache + coalescing decorator)
+│   ├── cache/                     — DurableCache, CacheStore, RoomCacheStore, RequestCoalescer - see CACHE_POLICY.md
+│   ├── local/                    — Room: SavedLaunchEntity, VesselProfileEntity, CacheEntryEntity;
+│   │                                SharedPreferences: VesselPreferenceStore
+│   ├── mapper/                    — DTO → domain, one file per provider (+ VesselProfileMapper)
 │   └── repository/               — DefaultBoatingRepository (provider fan-out + consensus + station-local
-│                                    forecast/observation comparison), RoomSavedLaunchRepository
+│                                    forecast/observation comparison), RoomSavedLaunchRepository,
+│                                    RoomVesselProfileRepository
 ├── ui/
 │   ├── theme/                    — WakeWindowTheme, AppearanceMode resolution, CategoryColors
 │   ├── splash/                   — InknautSplashScreen
 │   ├── navigation/                — WakeWindowNavHost, route constants
-│   ├── launchlist/                 — saved launches, entry point
-│   ├── launchsearch/                — place search (Photon-backed)
-│   ├── planboat/                  — date + departure + return time selection, duration
-│   ├── assessment/                 — full boating-day assessment display
-│   ├── launchinfo/                 — MarineFacilityInfo display (honest-when-sparse)
+│   ├── launchlist/                 — saved launches, entry point, "usually 7 AM · 6h" recall
+│   ├── launchsearch/                — place search (FWC/USACE/Photon-backed)
+│   ├── planboat/                  — date + departure + return time selection, duration, quick plans, daylight context
+│   ├── assessment/                 — full boating-day assessment display, tide/current timeline
+│   ├── launchinfo/                 — MarineFacilityInfo display (Access/Facilities/Contact/Location/Source)
+│   ├── vessel/                    — VesselProfileScreen (custom vessel profile editor)
 │   ├── settings/
 │   └── about/                     — safety disclaimer + Inknaut attribution
 ├── AppDependencies.kt              — manual DI composition root (object, RideCast-style)
@@ -209,10 +217,13 @@ needed.
 
 ## Caching
 
-**As actually built** (corrected from an earlier draft of this doc that described a caching
-decorator this project doesn't have): there is no repository-level TTL cache wrapping
-`DefaultBoatingRepository.buildAssessment()` yet — each call fans out to every provider fresh.
-What does exist, scoped to where it clearly matters:
+**Sprint 4 added `data/cache/DurableCache`** — a generic, Room-backed TTL cache, plus
+`RequestCoalescer` for in-process concurrent-request de-duplication - see
+[CACHE_POLICY.md](CACHE_POLICY.md) for the full design, what's wired in (FWC facility lookups,
+place search), and what's still fetched fresh every time (the weather/tide/current/alert
+fan-out inside `DefaultBoatingRepository.buildAssessment()` — deliberately not wrapped yet; see
+that doc for exactly why, provider by provider). What already existed before Sprint 4, scoped
+to where it clearly mattered, is still exactly as it was:
 
 - `NwsProviders` caches the `/points` → `forecastGridData` URL and resolved `ZoneId` per
   coordinate indefinitely (in-memory, no TTL) — pure geography, never goes stale, mirroring
@@ -225,20 +236,24 @@ What does exist, scoped to where it clearly matters:
 - `CoopsTideProvider` caches the full CO-OPS tide-station list (~3,500 stations) for the
   process lifetime once fetched.
 
-A RideCast-style three-tier decorator (in-memory TTL → durable Room fallback → live fetch,
-stale-over-error on failure) around the whole assessment is a reasonable next addition once
-real usage shows repeated `buildAssessment()` calls for the same plan are common enough to
-matter — see "Scale and Provider Risk" in [ROADMAP.md](ROADMAP.md).
+Extending `DurableCache` to wrap the whole assessment fan-out (in-memory TTL is *not* what's
+missing — durable, cross-restart caching is) is a reasonable next addition once real usage
+shows repeated `buildAssessment()` calls for the same plan are common enough to matter, or once
+the safety-critical staleness questions around alerts specifically have had a proper review —
+see "Scale and Provider Risk" in [ROADMAP.md](ROADMAP.md) and [CACHE_POLICY.md](CACHE_POLICY.md).
 
 ## What's deliberately not here yet
 
-WorkManager background refresh, notifications, maps, `MarineFacilityInfoProvider`
-implementations, real-time (PORTS) current *observations* (only *predictions* are implemented -
-see [DATA_SOURCES.md](DATA_SOURCES.md)), the Inknaut splash's onboarding-check gate, and Mode B
-(port-to-port) route generation are all out of scope so far — see [ROADMAP.md](ROADMAP.md).
-NDBC observations (`MarineObservationProvider`) shipped in Sprint 2; `CurrentProvider`
-(NOAA CO-OPS current predictions), the FWC/USACE place-discovery sources, station
-representativeness/environment classification, the alert relevance model, and the first vessel
-presets all shipped in Sprint 3 — each along the same "new implementation of an existing seam,
-or a new interface consumed by an existing call site" pattern, without a call site that
-predates it needing to change shape.
+WorkManager background refresh, notifications, maps, real-time (PORTS) current *observations*
+(only *predictions* are implemented - see [DATA_SOURCES.md](DATA_SOURCES.md)), the Inknaut
+splash's onboarding-check gate, and Mode B (port-to-port) *UI and per-waypoint weather fetch*
+(the domain model itself shipped in Sprint 4 - see [TRIP_PLANNING.md](TRIP_PLANNING.md)) are
+all out of scope so far — see [ROADMAP.md](ROADMAP.md). NDBC observations
+(`MarineObservationProvider`) shipped in Sprint 2; `CurrentProvider` (NOAA CO-OPS current
+predictions), the FWC/USACE place-discovery sources, station representativeness/environment
+classification, the alert relevance model, and the first vessel presets shipped in Sprint 3;
+the first real `MarineFacilityInfoProvider` implementation, custom/persisted vessel profiles,
+sunrise/sunset, quick-plan presets, durable caching, and the Mode B domain foundation all
+shipped in Sprint 4 — each along the same "new implementation of an existing seam, or a new
+interface consumed by an existing call site" pattern, without a call site that predates it
+needing to change shape.

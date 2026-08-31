@@ -24,6 +24,11 @@ data class SavedLaunchEntity(
     val placeType: String,
     val isFavorite: Boolean,
     val savedAtEpochMillis: Long,
+    /** See [com.wakewindow.app.domain.place.SavedLaunch] "Recent plans" - null columns for a
+     * launch saved before this field existed, or one never actually planned yet. */
+    val lastDepartureHourOfDay: Int? = null,
+    val lastDurationMinutes: Long? = null,
+    val lastVesselProfileId: String? = null,
 )
 
 @Dao

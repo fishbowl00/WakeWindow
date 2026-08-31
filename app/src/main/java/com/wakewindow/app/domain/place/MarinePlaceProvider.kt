@@ -23,4 +23,12 @@ data class SavedLaunch(
     val place: MarinePlace,
     val isFavorite: Boolean = false,
     val savedAtEpochMillis: Long,
+    /** The last plan actually run for this launch, so re-selecting it can suggest "your usual"
+     * departure time/duration/vessel instead of a generic default - see docs/PLANNING.md
+     * "Recent plans." All null until the first assessment for this launch is ever run. Hour is
+     * local-time-of-day (0-23) rather than an absolute instant, since "usually leave around
+     * 7am" is what's actually worth remembering, not a specific past calendar date. */
+    val lastDepartureHourOfDay: Int? = null,
+    val lastDurationMinutes: Long? = null,
+    val lastVesselProfileId: String? = null,
 )

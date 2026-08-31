@@ -1,9 +1,14 @@
 package com.wakewindow.app.data.remote.fwc
 
 import com.wakewindow.app.domain.model.GeoPoint
+import com.wakewindow.app.domain.model.SourceReference
+import com.wakewindow.app.domain.model.SourceType
+import com.wakewindow.app.domain.place.FacilityOperationalStatus
+import com.wakewindow.app.domain.place.MarineFacilityInfo
 import com.wakewindow.app.domain.place.MarinePlaceCandidate
 import com.wakewindow.app.domain.place.MarinePlaceType
 import com.wakewindow.app.domain.place.PlaceSourceType
+import java.time.Instant
 
 /**
  * Pure query-building and DTO -> domain mapping for the FWC boat ramp inventory, kept separate
@@ -41,6 +46,64 @@ object FwcMapper {
                 address = listOfNotNull(a.street1, a.city, a.county?.let { "$it County, FL" }).joinToString(", ").ifBlank { null },
                 guessedType = MarinePlaceType.BOAT_RAMP,
                 sourceType = PlaceSourceType.FWC_BOAT_RAMP,
+                sourceId = a.objectId?.toString(),
             )
         }
+
+    /** Builds an exact-match `where` clause for re-fetching a single known record by its
+     * ArcGIS `OBJECTID` - used by [FwcFacilityInfoProvider] instead of a fuzzy name match
+     * whenever [MarinePlaceCandidate.sourceId] is available. */
+    fun whereClauseForObjectId(objectId: String): String = "OBJECTID=$objectId"
+
+    /** Fallback exact-name match for a candidate saved before [MarinePlaceCandidate.sourceId]
+     * existed, or if a future record legitimately lacks one - a real possibility for any
+     * long-lived saved launch, not a hypothetical. */
+    fun whereClauseForExactName(name: String): String {
+        val escaped = name.trim().uppercase().replace("'", "''")
+        return "UPPER(RampName)='$escaped'"
+    }
+
+    /**
+     * Maps FWC's own ramp fields into [MarineFacilityInfo] - see docs/DATA_SOURCES.md "Marine
+     * place / launch intelligence." Only fields the dataset actually populates are set; every
+     * other [MarineFacilityInfo] field is left at its `UNKNOWN`/null default rather than
+     * guessed - FWC's schema simply doesn't publish ramp lanes, gate hours, VHF channel, etc.
+     * as separate structured fields, so those stay honestly unknown until a source that does
+     * publish them is wired in.
+     */
+    fun toFacilityInfo(attributes: FwcAttributes, retrievedAt: Instant = Instant.now()): MarineFacilityInfo {
+        val a = attributes
+        return MarineFacilityInfo(
+            phone = a.contactPhone?.takeIf { it.isNotBlank() },
+            waterBodyName = a.waterBodyName?.takeIf { it.isNotBlank() },
+            rampLanes = a.totalLanes,
+            rampType = a.rampType?.takeIf { it.isNotBlank() },
+            accessType = a.accessType?.takeIf { it.isNotBlank() },
+            amenitiesRaw = a.amenities?.takeIf { it.isNotBlank() },
+            operationalStatus = operationalStatusOf(a.status),
+            operationalStatusRaw = a.status?.takeIf { it.isNotBlank() },
+            source = SourceReference(
+                sourceName = "Florida FWC Boat Ramp Inventory",
+                sourceUrl = "https://myfwc.com/boating/boat-ramps/",
+                retrievedAt = retrievedAt,
+                recordId = a.objectId?.toString(),
+                sourceType = SourceType.STATE_AGENCY,
+                isOfficial = true,
+            ),
+        )
+    }
+
+    /** Classifies FWC's free-text `Status` field - confirmed live values (Sprint 3) include
+     * "Open for Business" and "Temporarily Closed"; anything not recognized stays [UNKNOWN]
+     * rather than guessed, since the dataset's full status vocabulary isn't itself verified. */
+    fun operationalStatusOf(status: String?): FacilityOperationalStatus {
+        val normalized = status?.trim()?.lowercase() ?: return FacilityOperationalStatus.UNKNOWN
+        return when {
+            "open" in normalized -> FacilityOperationalStatus.OPEN
+            "temporarily closed" in normalized -> FacilityOperationalStatus.CLOSED
+            "seasonal" in normalized -> FacilityOperationalStatus.SEASONAL
+            "closed" in normalized || "removed" in normalized || "destroyed" in normalized -> FacilityOperationalStatus.CLOSED
+            else -> FacilityOperationalStatus.UNKNOWN
+        }
+    }
 }

@@ -69,4 +69,22 @@ class VesselProfileTest {
         val after = VesselProfile.default()
         assertEquals(before, after)
     }
+
+    @Test
+    fun `a preset's id is its own name - it needs no separate persistence row to be selectable`() {
+        VesselProfile.presets().forEach { preset -> assertEquals(preset.name, preset.id) }
+    }
+
+    @Test
+    fun `withNewId assigns a fresh id while preserving every other field`() {
+        val base = VesselProfile.presets().first()
+        val withNewId = base.withNewId()
+        assertTrue(withNewId.id != base.id)
+        assertEquals(base.copy(id = withNewId.id), withNewId)
+    }
+
+    @Test
+    fun `no preset is flagged custom - only a user-saved profile is`() {
+        VesselProfile.presets().forEach { preset -> assertTrue(!preset.isCustom) }
+    }
 }

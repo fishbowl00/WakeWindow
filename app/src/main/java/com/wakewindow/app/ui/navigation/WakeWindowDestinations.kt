@@ -10,6 +10,7 @@ object WakeWindowDestinations {
     const val PLAN = "plan"
     const val ASSESSMENT = "assessment"
     const val LAUNCH_INFO = "launch_info"
+    const val VESSEL = "vessel"
     const val SETTINGS = "settings"
     const val ABOUT = "about"
 }

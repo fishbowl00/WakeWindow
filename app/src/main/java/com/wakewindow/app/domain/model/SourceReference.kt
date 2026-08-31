@@ -34,4 +34,8 @@ data class SourceReference(
     val verifiedAt: Instant? = null,
     val sourceType: SourceType? = null,
     val isOfficial: Boolean = false,
+    /** The source's own record identifier for a non-station record (e.g. FWC's ArcGIS
+     * `OBJECTID` for a boat ramp) - lets provenance point back at the exact record without
+     * overloading [stationId], which specifically means a physical observing station. */
+    val recordId: String? = null,
 )

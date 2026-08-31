@@ -51,6 +51,7 @@ import com.wakewindow.app.domain.scoring.EvidenceItem
 import com.wakewindow.app.domain.scoring.Hazard
 import com.wakewindow.app.domain.scoring.PointAssessment
 import com.wakewindow.app.domain.scoring.severityRank
+import com.wakewindow.app.domain.tide.CurrentEventType
 import com.wakewindow.app.domain.tide.TideTrend
 import com.wakewindow.app.ui.WakeWindowUiState
 import com.wakewindow.app.ui.theme.label
@@ -116,6 +117,9 @@ private fun AssessmentContent(assessment: BoatingWindowAssessment, zoneId: ZoneI
         item { OverallCard(assessment) }
         assessment.bestWindow?.let { window -> item { BestWindowCard(window, zoneId) } }
         item { ConditionsGrid(assessment.departureAssessment) }
+        if (assessment.departureAssessment.conditions?.tideHeightFt != null || assessment.departureAssessment.conditions?.currentSpeedKts != null) {
+            item { TideCurrentCard(assessment, zoneId) }
+        }
         item { WindowBreakdownCard(assessment) }
         if (assessment.worstHazards.isNotEmpty()) {
             item { HazardsCard(assessment.worstHazards, zoneId) }
@@ -234,6 +238,70 @@ private fun ConditionsGrid(point: PointAssessment) {
             }
         }
     }
+}
+
+/**
+ * A whole-outing tide/current timeline (departure -> next turn -> return) rather than a single
+ * point-in-time reading - see docs/PLANNING.md "Currents/tides." Everything here is explicitly
+ * a *prediction*, never presented as a live observation (see docs/DATA_SOURCES.md "Current
+ * predictions") - CO-OPS publishes harmonic predictions for the overwhelming majority of
+ * stations, not a continuous sensor feed. A tide height is a prediction about the water
+ * surface, never a claim about depth/clearance under a hull.
+ */
+@Composable
+private fun TideCurrentCard(assessment: BoatingWindowAssessment, zoneId: ZoneId) {
+    val departure = assessment.departureAssessment.conditions
+    val returnConditions = assessment.returnAssessment.conditions
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            if (departure?.tideHeightFt != null) {
+                Text("Tide (prediction)", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(modifier = Modifier.height(6.dp))
+                TimelineRow("Departure", "${String.format("%.1f", departure.tideHeightFt)} ft · ${departure.tideTrend?.label() ?: "Unknown"}")
+                val nextTideEvents = listOfNotNull(
+                    departure.nextHighTide?.let { "Next high" to it },
+                    departure.nextLowTide?.let { "Next low" to it },
+                )
+                nextTideEvents.minByOrNull { it.second.time }?.let { (label, next) ->
+                    TimelineRow(label, "${String.format("%.1f", next.heightFt)} ft at ${formatTime(next.time, zoneId)}")
+                }
+                returnConditions?.tideHeightFt?.let {
+                    TimelineRow("Return", "${String.format("%.1f", it)} ft · ${returnConditions.tideTrend?.label() ?: "Unknown"}")
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+            }
+            if (departure?.currentSpeedKts != null) {
+                Text("Current (prediction)", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(modifier = Modifier.height(6.dp))
+                TimelineRow("Departure", currentSummary(departure.currentSpeedKts, departure.currentDirectionDeg))
+                departure.nextCurrentEvent?.let { next ->
+                    TimelineRow(next.type.label(), "${formatTime(next.time, zoneId)}${if (next.type != CurrentEventType.SLACK) " · ${String.format("%.1f", next.speedKts)} kt" else ""}")
+                }
+                returnConditions?.currentSpeedKts?.let {
+                    TimelineRow("Return", currentSummary(it, returnConditions.currentDirectionDeg))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TimelineRow(label: String, value: String) {
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+    }
+}
+
+private fun currentSummary(speedKts: Double, directionDeg: Double?): String {
+    val speed = "${String.format("%.1f", speedKts)} kt"
+    return if (directionDeg != null) "$speed @ ${directionDeg.roundToInt()}°" else speed
+}
+
+private fun CurrentEventType.label(): String = when (this) {
+    CurrentEventType.FLOOD_MAX -> "Max flood"
+    CurrentEventType.EBB_MAX -> "Max ebb"
+    CurrentEventType.SLACK -> "Slack"
 }
 
 private fun TideTrend.label(): String = when (this) {

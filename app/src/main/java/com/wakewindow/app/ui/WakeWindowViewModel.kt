@@ -4,11 +4,15 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.wakewindow.app.AppDependencies
+import com.wakewindow.app.domain.model.GeoPoint
+import com.wakewindow.app.domain.place.FacilityInfoOutcome
 import com.wakewindow.app.domain.place.MarinePlace
 import com.wakewindow.app.domain.place.MarinePlaceCandidate
 import com.wakewindow.app.domain.place.PlaceSearchOutcome
 import com.wakewindow.app.domain.place.SavedLaunch
 import com.wakewindow.app.domain.route.BoatingPlan
+import com.wakewindow.app.domain.route.QuickPlanKind
+import com.wakewindow.app.domain.route.QuickPlanPresets
 import com.wakewindow.app.domain.vessel.VesselProfile
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -21,15 +25,18 @@ import java.util.UUID
 class WakeWindowViewModel(application: Application) : AndroidViewModel(application) {
 
     private val savedLaunchRepository = AppDependencies.savedLaunchRepository(application)
-    private val placeProvider = AppDependencies.placeProvider()
+    private val placeProvider = AppDependencies.placeProvider(application)
     private val boatingRepository = AppDependencies.boatingRepository()
     private val vesselPreferenceStore = AppDependencies.vesselPreferenceStore(application)
+    private val vesselProfileRepository = AppDependencies.vesselProfileRepository(application)
+    private val facilityInfoProvider = AppDependencies.facilityInfoProvider(application)
 
-    private val _uiState = MutableStateFlow(WakeWindowUiState(vessel = vesselPreferenceStore.loadSelectedPreset() ?: VesselProfile.default()))
+    private val _uiState = MutableStateFlow(WakeWindowUiState(vessel = VesselProfile.default()))
     val uiState: StateFlow<WakeWindowUiState> = _uiState.asStateFlow()
 
     init {
         loadSavedLaunches()
+        loadVesselProfiles()
     }
 
     /** Changing vessel never overrides an active marine warning gate or hides a hazard - it
@@ -37,8 +44,48 @@ class WakeWindowViewModel(application: Application) : AndroidViewModel(applicati
      * scores against. Persisted immediately so the choice survives app restarts - see
      * [com.wakewindow.app.data.local.VesselPreferenceStore]. */
     fun setVessel(profile: VesselProfile) {
-        vesselPreferenceStore.saveSelectedPreset(profile)
+        vesselPreferenceStore.saveSelectedProfileId(profile.id)
         _uiState.update { it.copy(vessel = profile) }
+    }
+
+    private fun loadVesselProfiles() {
+        viewModelScope.launch {
+            val custom = vesselProfileRepository.getAllCustom()
+            val selected = vesselPreferenceStore.loadSelectedProfile(custom)
+            _uiState.update { it.copy(customVessels = custom, vessel = selected) }
+        }
+    }
+
+    /**
+     * Saves a user-created or user-edited vessel profile (see docs/VESSEL_PROFILES.md
+     * "Planning preferences, not safe limits") and makes it the active vessel. [profile] must
+     * already carry a real, stable ID (see [VesselProfile.withNewId]) - editing an existing
+     * saved profile reuses its ID so this genuinely updates it rather than creating a
+     * duplicate.
+     */
+    fun saveVesselProfile(profile: VesselProfile) {
+        viewModelScope.launch {
+            val customProfile = profile.copy(isCustom = true)
+            vesselProfileRepository.save(customProfile)
+            val custom = vesselProfileRepository.getAllCustom()
+            vesselPreferenceStore.saveSelectedProfileId(customProfile.id)
+            _uiState.update { it.copy(customVessels = custom, vessel = custom.firstOrNull { it.id == customProfile.id } ?: customProfile) }
+        }
+    }
+
+    fun deleteVesselProfile(id: String) {
+        viewModelScope.launch {
+            vesselProfileRepository.delete(id)
+            val custom = vesselProfileRepository.getAllCustom()
+            val stillSelected = _uiState.value.vessel.id != id
+            _uiState.update {
+                it.copy(
+                    customVessels = custom,
+                    vessel = if (stillSelected) it.vessel else VesselProfile.default(),
+                )
+            }
+            if (!stillSelected) vesselPreferenceStore.saveSelectedProfileId(VesselProfile.default().id)
+        }
     }
 
     fun loadSavedLaunches() {
@@ -57,7 +104,7 @@ class WakeWindowViewModel(application: Application) : AndroidViewModel(applicati
         if (query.isBlank()) return
         viewModelScope.launch {
             _uiState.update { it.copy(isSearching = true, searchError = null) }
-            when (val outcome = placeProvider.search(query)) {
+            when (val outcome = placeProvider.search(query, searchBias())) {
                 is PlaceSearchOutcome.Success -> _uiState.update {
                     it.copy(isSearching = false, searchResults = outcome.candidates)
                 }
@@ -66,6 +113,20 @@ class WakeWindowViewModel(application: Application) : AndroidViewModel(applicati
                 }
             }
         }
+    }
+
+    /**
+     * Biases search results toward the boater's own area without ever requiring device
+     * location permission - see docs/PLACE_DISCOVERY.md "Location bias." Device/GPS location
+     * bias is deliberately not implemented this sprint (it would need a new location-services
+     * dependency and a runtime-permission flow that can't be verified without a physical
+     * device - see docs/ROADMAP.md); the currently-active plan's launch, or otherwise the most
+     * recently saved launch, is a real proxy for "the boater's area" that needs neither. With
+     * no saved launches at all, search remains unbiased text relevance only, exactly as before.
+     */
+    private fun searchBias(): GeoPoint? {
+        val state = _uiState.value
+        return state.activeLaunch?.place?.location ?: state.savedLaunches.firstOrNull()?.place?.location
     }
 
     /** Saves the chosen candidate as a launch, makes it the active plan's launch, and
@@ -89,22 +150,68 @@ class WakeWindowViewModel(application: Application) : AndroidViewModel(applicati
         viewModelScope.launch { activateLaunch(launch) }
     }
 
+    /** Shows the launch immediately with whatever facility data it already carries, then fetches
+     * real facility intelligence in the background - see [com.wakewindow.app.domain.place.MarineFacilityInfoProvider].
+     * Every non-FWC place simply gets [FacilityInfoOutcome.NoDataAvailable] back and stays at
+     * its honest all-unknown default; that is not an error and is never surfaced as one. */
     fun viewLaunchInfo(launch: SavedLaunch) {
-        _uiState.update { it.copy(infoLaunch = launch) }
+        _uiState.update { it.copy(infoLaunch = launch, isLoadingFacilityInfo = false, facilityInfoError = null) }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoadingFacilityInfo = true) }
+            val outcome = try {
+                facilityInfoProvider.facilityInfoFor(launch.place.discovery)
+            } catch (e: Exception) {
+                FacilityInfoOutcome.Failure(e.message ?: "Could not load facility information", e)
+            }
+            _uiState.update { state ->
+                // The user may have navigated to a different launch's info (or away entirely)
+                // while this fetch was in flight - never let a stale response overwrite it.
+                if (state.infoLaunch?.id != launch.id) return@update state
+                when (outcome) {
+                    is FacilityInfoOutcome.Success -> state.copy(
+                        isLoadingFacilityInfo = false,
+                        infoLaunch = launch.copy(place = launch.place.copy(facility = outcome.facility)),
+                    )
+                    FacilityInfoOutcome.NoDataAvailable -> state.copy(isLoadingFacilityInfo = false)
+                    is FacilityInfoOutcome.Failure -> state.copy(isLoadingFacilityInfo = false, facilityInfoError = outcome.message)
+                }
+            }
+        }
     }
 
+    /**
+     * Resolves the plan to start from - "your usual" (see [SavedLaunch]'s "Recent plans") when
+     * this launch has one, an hour from now for 8 hours otherwise, exactly as before. A launch
+     * that remembers "usually 7am for about 6 hours in the Center Console" is faster to plan
+     * the second time without the user re-entering anything.
+     */
     private suspend fun activateLaunch(launch: SavedLaunch) {
         val zone = AppDependencies.nwsProviders.resolveZoneId(launch.place.location)
         val now = Instant.now().atZone(zone)
-        val defaultDurationMinutes = 8 * 60L
-        val departure = now.plusMinutes(60).withMinute(0).withSecond(0).withNano(0).toInstant()
-        val returnTime = departure.plusSeconds(defaultDurationMinutes * 60)
+
+        val departure: Instant
+        val returnTime: Instant
+        if (launch.lastDepartureHourOfDay != null && launch.lastDurationMinutes != null) {
+            val todayAtUsualHour = now.withHour(launch.lastDepartureHourOfDay).withMinute(0).withSecond(0).withNano(0)
+            val candidate = if (todayAtUsualHour.isAfter(now)) todayAtUsualHour else todayAtUsualHour.plusDays(1)
+            departure = candidate.toInstant()
+            returnTime = departure.plusSeconds(launch.lastDurationMinutes * 60)
+        } else {
+            departure = now.plusMinutes(60).withMinute(0).withSecond(0).withNano(0).toInstant()
+            returnTime = departure.plusSeconds(8 * 60 * 60L)
+        }
+
+        val vessel = launch.lastVesselProfileId
+            ?.let { id -> _uiState.value.availableVessels.firstOrNull { it.id == id } }
+            ?: _uiState.value.vessel
+
         _uiState.update {
             it.copy(
                 activeLaunch = launch,
                 zoneId = zone,
                 departureTime = departure,
                 returnTime = returnTime,
+                vessel = vessel,
                 assessment = null,
                 assessmentError = null,
             )
@@ -120,6 +227,19 @@ class WakeWindowViewModel(application: Application) : AndroidViewModel(applicati
 
     fun setReturnTime(instant: Instant) {
         _uiState.update { it.copy(returnTime = instant) }
+    }
+
+    /** Applies a quick-plan shortcut (Morning/Afternoon/Evening/Full day) - see
+     * [com.wakewindow.app.domain.route.QuickPlanPresets]. A no-op for [QuickPlanKind.CUSTOM],
+     * which just means "keep whatever the manual pickers already have." Uses real sunrise/
+     * sunset for the departure date when a launch is active, falling back to deterministic
+     * clock defaults otherwise. */
+    fun applyQuickPlan(kind: QuickPlanKind) {
+        if (kind == QuickPlanKind.CUSTOM) return
+        val state = _uiState.value
+        val date = (state.departureTime ?: Instant.now()).atZone(state.zoneId).toLocalDate()
+        val window = QuickPlanPresets.windowFor(kind, date, state.zoneId, state.sunTimes)
+        _uiState.update { it.copy(departureTime = window.departure, returnTime = window.returnTime) }
     }
 
     fun runAssessment() {
@@ -141,7 +261,35 @@ class WakeWindowViewModel(application: Application) : AndroidViewModel(applicati
                 _uiState.update { it.copy(isLoadingAssessment = false, assessment = assessment) }
             } catch (e: Exception) {
                 _uiState.update { it.copy(isLoadingAssessment = false, assessmentError = e.message ?: "Could not build an assessment") }
+                return@launch
             }
+            try {
+                rememberPlan(launch, departure, returnTime, state.vessel)
+            } catch (e: Exception) {
+                // See rememberPlan's doc comment - the assessment itself already succeeded by
+                // this point, so a failure to persist "your usual plan" must never read as an
+                // assessment error.
+            }
+        }
+    }
+
+    /** Persists this plan's departure hour/duration/vessel back onto its [SavedLaunch] - see
+     * "Recent plans" on [SavedLaunch]. Fire-and-forget from the caller's perspective: a failure
+     * here should never surface as an assessment error, since the assessment itself already
+     * succeeded by the time this runs. */
+    private suspend fun rememberPlan(launch: SavedLaunch, departure: Instant, returnTime: Instant, vessel: VesselProfile) {
+        val zone = _uiState.value.zoneId
+        val updated = launch.copy(
+            lastDepartureHourOfDay = departure.atZone(zone).hour,
+            lastDurationMinutes = java.time.Duration.between(departure, returnTime).toMinutes(),
+            lastVesselProfileId = vessel.id,
+        )
+        savedLaunchRepository.save(updated)
+        _uiState.update { state ->
+            state.copy(
+                activeLaunch = if (state.activeLaunch?.id == launch.id) updated else state.activeLaunch,
+                savedLaunches = state.savedLaunches.map { if (it.id == updated.id) updated else it },
+            )
         }
     }
 

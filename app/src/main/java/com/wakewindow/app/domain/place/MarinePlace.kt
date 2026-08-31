@@ -43,6 +43,11 @@ data class MarinePlaceCandidate(
     val address: String?,
     val guessedType: MarinePlaceType,
     val sourceType: PlaceSourceType = PlaceSourceType.GEOCODING,
+    /** The source's own record identifier (e.g. FWC's ArcGIS `OBJECTID`), when the source
+     * exposes one - lets a [MarineFacilityInfoProvider] re-fetch the exact record it came from
+     * rather than re-matching by name/coordinates, which is fragile against duplicate or
+     * renamed entries. Null for sources with no stable ID (e.g. Photon). */
+    val sourceId: String? = null,
 )
 
 /**

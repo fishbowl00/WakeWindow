@@ -332,13 +332,25 @@ which the preset numbers reflect (lower gust/wave tolerance despite comparable l
 sailboat's tolerance reflects motoring/day-sailing in developing weather, not a bluewater
 passage, and it is not flagged `isSmallCraft` the way the others are.
 
-Selection is a compact, single-row chip picker on the plan screen (never a full-screen editor
-this sprint) and persists across app restarts via `VesselPreferenceStore` (a plain
-`SharedPreferences` value — a single scalar for a single-user app doesn't warrant a new Room
-entity/migration). **Vessel choice only ever changes which tolerances scoring reads — it can
-never override, hide, or downgrade an active marine-alert gate.** The alert relevance model
-above gates identically regardless of which preset is selected; only the numeric wind/wave/
-gust/visibility thresholds vary by vessel.
+Selection is a compact, single-row chip picker on the plan screen and persists across app
+restarts via `VesselPreferenceStore` (a plain `SharedPreferences` value holding the *selected
+profile's ID* — a single scalar for a single-user app doesn't warrant a new Room entity/
+migration for that one value). **Vessel choice only ever changes which tolerances scoring
+reads — it can never override, hide, or downgrade an active marine-alert gate.** The alert
+relevance model above gates identically regardless of which preset is selected; only the
+numeric wind/wave/gust/visibility thresholds vary by vessel.
+
+**Sprint 4 — custom profiles.** `VesselProfile` gained `id`, `isCustom`, and
+`created/updatedAtEpochMillis` fields (the five presets' `id` is simply their own `name`; a
+user-saved profile gets a real UUID via `VesselProfile.withNewId()`). A real vessel-profile
+screen (`ui/vessel/VesselProfileScreen`) lets a boater start from a preset, rename it, set its
+type/length, and edit its tolerances directly, then save it as a genuinely new, persisted
+profile (`VesselProfileEntity`/`RoomVesselProfileRepository`, Room-backed, supporting multiple
+saved profiles from the start — not one hardcoded custom slot). See
+[VESSEL_PROFILES.md](VESSEL_PROFILES.md) for the full model and the deliberate language choice
+("planning preferences"/"comfort thresholds," never "safe limits") this screen uses throughout.
+Custom-profile tolerances flow through `MarinePointScorer` exactly like a preset's — no new
+scoring code path, no exception to the alert-gate independence above.
 
 ## Explicitly not vessel-hardcoded
 

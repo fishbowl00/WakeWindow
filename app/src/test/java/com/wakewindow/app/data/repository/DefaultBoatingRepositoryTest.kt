@@ -302,4 +302,76 @@ class DefaultBoatingRepositoryTest {
         assertEquals(90.0, assessment.departureAssessment.conditions?.currentDirectionDeg)
         assertTrue(assessment.evidence.items.any { it.label.contains("current", ignoreCase = true) && it.available })
     }
+
+    // --- Provider resilience: a THROWING provider (not a well-behaved sealed Failure/Outcome)
+    // must never crash the whole assessment either - see docs/DATA_SOURCES.md "Fallback
+    // behavior" and the `safeCall`/`safeAlertCall`/etc. wrappers in DefaultBoatingRepository.
+
+    private class ThrowingGeneralProvider : GeneralWeatherProvider {
+        override val providerName = "ThrowingGeneral"
+        override suspend fun hourlyForecast(location: GeoPoint, start: Instant, end: Instant): ForecastOutcome =
+            throw RuntimeException("general provider crashed")
+    }
+
+    private class ThrowingAlertProvider : MarineAlertProvider {
+        override suspend fun activeAlerts(location: GeoPoint): MarineAlertOutcome = throw RuntimeException("alert provider crashed")
+    }
+
+    private class ThrowingTideProvider : TideProvider {
+        override suspend fun nearestStation(location: GeoPoint): TideStationOutcome = throw RuntimeException("tide provider crashed")
+        override suspend fun events(stationId: String, date: LocalDate): TideEventsOutcome = throw RuntimeException("unreachable")
+    }
+
+    private class ThrowingObservationProvider : MarineObservationProvider {
+        override val providerName = "ThrowingNDBC"
+        override suspend fun nearestObservation(location: GeoPoint): MarineObservationOutcome = throw RuntimeException("NDBC crashed")
+    }
+
+    private class ThrowingCurrentProvider : com.wakewindow.app.domain.tide.CurrentProvider {
+        override suspend fun nearestStation(location: GeoPoint): com.wakewindow.app.domain.tide.CurrentStationOutcome = throw RuntimeException("current provider crashed")
+        override suspend fun events(stationId: String, date: LocalDate): com.wakewindow.app.domain.tide.CurrentEventsOutcome = throw RuntimeException("unreachable")
+    }
+
+    @Test
+    fun `a general forecast provider that throws does not crash the assessment when marine data is still available`() = runBlocking {
+        val calmMarine = calmSeries(departure.minusSeconds(3600), returnTime.plusSeconds(3600))
+        val repo = DefaultBoatingRepository(
+            generalProviders = listOf(ThrowingGeneralProvider()),
+            marineForecastProviders = listOf(FakeMarineProvider(ForecastOutcome.Success(calmMarine))),
+            alertProvider = FakeAlertProvider(MarineAlertOutcome.Success(emptyList())),
+            tideProvider = FakeTideProvider(),
+        )
+        val assessment = repo.buildAssessment(plan())
+        assertTrue(assessment.overallAssessment.category != BoatingCategory.UNAVAILABLE)
+    }
+
+    @Test
+    fun `an alert provider that throws downgrades confidence instead of crashing or reading as a clean bill of health`() = runBlocking {
+        val calm = calmSeries(departure.minusSeconds(3600), returnTime.plusSeconds(3600))
+        val repo = DefaultBoatingRepository(
+            generalProviders = listOf(FakeGeneralProvider(ForecastOutcome.Success(calm))),
+            marineForecastProviders = listOf(FakeMarineProvider(ForecastOutcome.Success(calm))),
+            alertProvider = ThrowingAlertProvider(),
+            tideProvider = FakeTideProvider(),
+        )
+        val assessment = repo.buildAssessment(plan())
+        assertTrue(assessment.confidence.level != ConfidenceLevel.HIGH)
+        assertTrue(assessment.evidence.limitations.any { it.contains("alert", ignoreCase = true) })
+    }
+
+    @Test
+    fun `every provider throwing simultaneously still returns a result rather than an unhandled exception`() = runBlocking {
+        val repo = DefaultBoatingRepository(
+            generalProviders = listOf(ThrowingGeneralProvider()),
+            marineForecastProviders = listOf(FakeMarineProvider(ForecastOutcome.Failure("marine down"))),
+            alertProvider = ThrowingAlertProvider(),
+            tideProvider = ThrowingTideProvider(),
+            observationProvider = ThrowingObservationProvider(),
+            currentProvider = ThrowingCurrentProvider(),
+        )
+        val assessment = repo.buildAssessment(plan())
+        // With genuinely zero usable data, UNAVAILABLE is the correct - and only honest -
+        // category; the real assertion is that buildAssessment() returned at all.
+        assertEquals(BoatingCategory.UNAVAILABLE, assessment.overallAssessment.category)
+    }
 }

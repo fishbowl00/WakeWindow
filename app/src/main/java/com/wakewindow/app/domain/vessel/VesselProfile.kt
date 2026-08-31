@@ -1,5 +1,7 @@
 package com.wakewindow.app.domain.vessel
 
+import java.util.UUID
+
 enum class VesselType {
     SMALL_CENTER_CONSOLE,
     BOWRIDER,
@@ -39,7 +41,24 @@ data class VesselProfile(
      * a materially larger/heavier vessel treats one as a deduction, not a hard gate -
      * see docs/MARINE_SCORING.md. */
     val isSmallCraft: Boolean = true,
+
+    /** Stable identity for a saved profile - a preset's `id` is its own name (presets have no
+     * separate persistence row; see [com.wakewindow.app.data.local.VesselProfileEntity]), a
+     * user-created/customized profile gets a real UUID. Never used by scoring itself (which
+     * only ever reads the tolerance fields above), only by persistence/selection UI. */
+    val id: String = name,
+    /** True only for a profile the user created or edited themselves - see
+     * docs/VESSEL_PROFILES.md "Planning preferences, not safe limits." A preset copied but not
+     * changed is still preset-derived, not custom. */
+    val isCustom: Boolean = false,
+    val notes: String? = null,
+    val createdAtEpochMillis: Long? = null,
+    val updatedAtEpochMillis: Long? = null,
 ) {
+    /** A fresh, real ID for a brand-new custom profile - callers should not construct their own
+     * UUIDs inline. */
+    fun withNewId(): VesselProfile = copy(id = UUID.randomUUID().toString())
+
     companion object {
         /** Sensible default recreational profile - a mid-size center-console/bowrider,
          * used until per-vessel profile selection is built. */

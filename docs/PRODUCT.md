@@ -79,8 +79,10 @@ and no value is ever invented to fill a gap. "Not available" beats a guess.
 Boating suitability is much more vessel-dependent than motorcycle-commute weather. A 2 ft chop
 that's a non-event for a 34' cruiser is a real hazard for a kayak or PWC. WakeWindow's scoring
 engine is architected around a `VesselProfile` from day one so thresholds are configurable per
-boat, even though the MVP ships with a single sensible default recreational profile and a
-minimal UI for it.
+boat. The MVP shipped a single default profile; Sprint 3 added five selectable presets; Sprint 4
+added a real vessel-profile editor letting a boater describe and save their actual boat — see
+[VESSEL_PROFILES.md](VESSEL_PROFILES.md). Every threshold there is explicitly a *planning
+preference*, never a manufacturer-rated safe operating limit.
 
 ## Facility data states
 
@@ -89,10 +91,11 @@ in one of four honest states, never collapsed into a single "unknown" or a guess
 
 - **Available** — verified present, with a source.
 - **Not available** — verified absent (confirmed the marina has no fuel dock, say).
-- **Unknown** — nobody has verified this fact yet. This is the default for everything until a
-  real facility-intelligence source is wired in (see [ROADMAP.md](ROADMAP.md) "Launch
-  intelligence"), and it is a genuinely different claim from "not available" — a launch with
-  "Unknown" fuel availability might well have fuel; WakeWindow simply hasn't confirmed it.
+- **Unknown** — nobody has verified this fact yet. This remains the default for every field a
+  wired-in source doesn't itself publish (see [DATA_SOURCES.md](DATA_SOURCES.md) "Marine place
+  / launch intelligence" — Sprint 4 wired Florida FWC boat ramps specifically, everything else
+  is still unverified), and it is a genuinely different claim from "not available" — a launch
+  with "Unknown" fuel availability might well have fuel; WakeWindow simply hasn't confirmed it.
 - **Not applicable** — the concept doesn't apply here at all (e.g. "transient slips" at a bare
   boat ramp with no docking).
 

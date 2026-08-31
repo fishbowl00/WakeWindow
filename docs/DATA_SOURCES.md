@@ -345,20 +345,82 @@ finding none; see [PLACE_DISCOVERY.md](PLACE_DISCOVERY.md) for why `UsaceMapper`
 **License/attribution:** U.S. government public data (owner `usace_crrel_als` on ArcGIS
 Online). No published rate limit encountered.
 
-**No facility-intelligence provider ships this sprint, deliberately.** `MarineFacilityInfoProvider`
-is a defined interface with zero implementations — per the sprint brief, an uncontrolled web
-scraper against arbitrary marina/harbor websites is explicitly out of scope (fragile, legally
-murky, unmaintainable at any scale). `LaunchInfoScreen` is built to render `MarineFacilityInfo`'s
-all-`UNKNOWN`/all-null default state honestly (confirmed live — see
-[ASSESSMENT_VALIDATION.md](ASSESSMENT_VALIDATION.md)), so wiring in a real source later is
-additive, not a UI rewrite. FWC's own boat ramp data actually includes richer per-ramp fields
-(`RampType`, `AccessType`, `TotalLanes`, `Amenities`, `ContactPhone`) that are currently
-discarded down to a `MarinePlaceCandidate` — a concrete, scoped opportunity for a future sprint
-(`SourceType.STATE_AGENCY`) rather than a general-purpose scraper. Other plausible future
-sources, not yet evaluated: official port/harbor-authority sites (`SourceType.OFFICIAL_PORT`)
-and marina-operator-published data where a marina explicitly opts in
-(`SourceType.MARINA_OPERATOR`). Each would need its own licensing/ToS review before integration
-— none is assumed usable yet.
+### Sprint 4 — `FwcFacilityInfoProvider`, the first real `MarineFacilityInfoProvider`
+
+FWC's own boat ramp inventory already carried richer per-ramp fields than Sprint 3's
+`FwcMapper` mapped through to `MarinePlaceCandidate`. Sprint 4 wires `OBJECTID`, `TotalLanes`,
+`Amenities`, and `ContactPhone` through into a real `MarineFacilityInfo` record
+(`FwcMapper.toFacilityInfo`), alongside the previously-fetched-but-discarded `RampType` and
+`AccessType`, and the already-used `WaterBodyName`/`Status`:
+
+- `TotalLanes` → `MarineFacilityInfo.rampLanes` (`Int?`)
+- `ContactPhone` → `phone`
+- `RampType`/`AccessType` → `rampType`/`accessType` (kept as the source's own free-text values,
+  not mapped into a WakeWindow-invented enum, since the real value vocabulary isn't itself
+  verified this sprint — see the caveat below)
+- `Amenities` → `amenitiesRaw` (kept as raw free text for the same reason — the field's
+  delimiter/format isn't verified enough to parse into individual `FacilityAvailability`
+  booleans without risking a wrong guess)
+- `WaterBodyName` → `waterBodyName`
+- `Status` → both a classified `FacilityOperationalStatus` (`OPEN`/`CLOSED`/`PARTIALLY_OPEN`/
+  `SEASONAL`/`UNKNOWN`, via `FwcMapper.operationalStatusOf` — confirmed live values from
+  Sprint 3 are `"Open for Business"`/`"Temporarily Closed"`; anything unrecognized stays
+  `UNKNOWN` rather than guessed) and the raw source string (`operationalStatusRaw`)
+- `OBJECTID` → `MarinePlaceCandidate.sourceId` and `SourceReference.recordId` — lets
+  `FwcFacilityInfoProvider` re-fetch the *exact* source record by ID (`OBJECTID=<id>`) rather
+  than re-matching fuzzily by name, and falls back to an exact ramp-name match for a candidate
+  saved before `sourceId` was tracked.
+
+Every field FWC doesn't publish (hours, fees, gate hours, VHF channel, dock/fuel/restroom/etc.)
+stays at its honest `UNKNOWN`/null default — this dataset simply doesn't carry those as
+separate structured fields. `MarineFacilityInfo` also gained `waterBodyName`, `rampType`,
+`accessType`, `amenitiesRaw`, `operationalStatus`, `operationalStatusRaw` this sprint to hold
+the above.
+
+Results are cached durably (`DurableCache`, 7-day TTL) — see [CACHE_POLICY.md](CACHE_POLICY.md).
+Only a genuinely successful lookup is cached; "no data" and "failed" outcomes are always
+re-attempted next time.
+
+**Verification caveat, stated honestly:** this session's outbound network access does not
+reach `gis.myfwc.com` (or any other live provider host — see the sprint report), so the three
+newly-added field names (`TotalLanes`, `Amenities`, `ContactPhone`) could not be re-verified
+live against the current schema the way the original fields were on 2026-08-30. They were
+already identified as present in this exact layer during Sprint 3's discovery work (see
+[ROADMAP.md](ROADMAP.md) "Next sprint" / [PLACE_DISCOVERY.md](PLACE_DISCOVERY.md) "What this is
+not," both written from a session that did have live access) — this sprint acts on that
+existing, previously-verified finding rather than a fresh guess. If any of the three field
+names is wrong, the JSON converter (`ignoreUnknownKeys = true`) simply returns `null` for it —
+degrading to `UNKNOWN`/absent, never a fabricated value. Re-verifying live against the current
+schema, and re-confirming `Amenities`' actual delimiter format (to decide whether it's ever
+safe to parse into structured booleans), is a concrete next step once network access allows it.
+
+**Still not attempted, deliberately:** USACE facility-level data (the recreation-areas layer
+integrated for discovery is confirmed, not re-investigated this sprint, to carry no ramp/
+facility fields — see [PLACE_DISCOVERY.md](PLACE_DISCOVERY.md)) and any general-purpose web
+scraper, per the same reasoning as Sprint 3. Other plausible future sources, still not
+evaluated: official port/harbor-authority sites (`SourceType.OFFICIAL_PORT`) and
+marina-operator-published data where a marina explicitly opts in
+(`SourceType.MARINA_OPERATOR`). Each would need its own licensing/ToS review before
+integration.
+
+### Production geocoder decision record (Sprint 4)
+
+The sprint brief asked for an investigation into a production-safe replacement for Photon as
+the geocoding fallback. **This session's environment has no outbound network access to any
+provider host** (see the sprint report's network-access section), which rules out the kind of
+real evaluation this needs — checking a vendor's actual current pricing, ToS, coverage, and
+Android SDK/REST ergonomics against real requests. Committing to a paid vendor without that
+verification, or without the user's explicit sign-off on a cost-bearing dependency, would be
+exactly the kind of decision the sprint brief itself warns against ("do NOT commit to a paid
+vendor merely because it is easy... do NOT turn this into procurement research"). Decision:
+**Photon remains the development/fallback geocoder, unchanged, with the risk it already
+carries.** See "Provider licensing summary" below for the specifics of that risk and
+[ROADMAP.md](ROADMAP.md) "Scale and Provider Risk" for when it becomes a real production
+blocker (roughly the ~500-daily-active mark). Candidates worth evaluating once network access
+and a cost decision are both available: Geoapify, LocationIQ, and Mapbox Geocoding all publish
+free tiers with defined commercial terms as of general public information available at
+authoring time — none of this has been verified against their current live terms this sprint,
+and that verification is the actual next step, not a conclusion reached here.
 
 ## Provider licensing summary
 
@@ -376,6 +438,20 @@ No conclusion above goes beyond what each provider's own published documentation
 is a summary of stated terms, not independent legal advice, and the two "No" rows should be
 revisited with real licensing/contractual review before any commercial release rather than
 treated as a permanent architectural fact.
+
+### Remove structural Open-Meteo dependency
+
+WakeWindow must keep working with Open-Meteo disabled entirely, not merely "degraded" — see
+"What this sprint deliberately does not do about it" above and the non-goal stated repeatedly
+across this doc. `AppDependencies.boatingRepository(includeOpenMeteo: Boolean = true)` is the
+seam: passing `false` builds `DefaultBoatingRepository` with only `nwsProviders` in both the
+general and marine provider lists. This isn't a config value nothing reads — every existing
+`DefaultBoatingRepositoryTest` case already runs exactly one general and one marine fake
+provider, which is structurally identical to this flag set to `false`; that suite is the
+regression coverage proving the NWS-only shape produces a real, non-crashing assessment (see
+e.g. `total marine provider failure still produces a result instead of crashing`). The default
+stays `true` (today's development configuration, unchanged) — flipping the real app's default
+before production is a deliberate follow-up decision, not made here.
 
 ## Fallback behavior (cross-cutting)
 

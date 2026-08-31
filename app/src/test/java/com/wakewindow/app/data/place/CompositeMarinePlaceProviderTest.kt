@@ -126,4 +126,68 @@ class CompositeMarinePlaceProviderTest {
         assertTrue(result is PlaceSearchOutcome.Success)
         assertTrue((result as PlaceSearchOutcome.Success).candidates.isEmpty())
     }
+
+    @Test
+    fun `within the geocoding tier a marina outranks a generically-typed place`() = runBlocking {
+        val other = candidate("Somewhere", location = GeoPoint(29.0, -81.0), sourceType = PlaceSourceType.GEOCODING, type = MarinePlaceType.OTHER)
+        val marina = candidate("A Marina", location = GeoPoint(30.0, -82.0), sourceType = PlaceSourceType.GEOCODING, type = MarinePlaceType.MARINA)
+        val provider = CompositeMarinePlaceProvider(
+            boatingSources = emptyList(),
+            fallback = FakeProvider(PlaceSearchOutcome.Success(listOf(other, marina))),
+        )
+        val result = provider.search("test") as PlaceSearchOutcome.Success
+        assertEquals(listOf(marina, other), result.candidates)
+    }
+
+    @Test
+    fun `with a bias point, results within the same tier and type rank by proximity to it`() = runBlocking {
+        val near = candidate("Near Ramp", location = GeoPoint(28.41, -80.60), sourceType = PlaceSourceType.GEOCODING)
+        val far = candidate("Far Ramp", location = GeoPoint(30.0, -82.0), sourceType = PlaceSourceType.GEOCODING)
+        val provider = CompositeMarinePlaceProvider(
+            boatingSources = emptyList(),
+            fallback = FakeProvider(PlaceSearchOutcome.Success(listOf(far, near))),
+        )
+        val bias = GeoPoint(28.408, -80.591)
+        val result = provider.search("test", bias) as PlaceSearchOutcome.Success
+        assertEquals(listOf(near, far), result.candidates)
+    }
+
+    @Test
+    fun `with no bias point, proximity never influences ranking`() = runBlocking {
+        val a = candidate("A", location = GeoPoint(28.41, -80.60), sourceType = PlaceSourceType.GEOCODING)
+        val b = candidate("B", location = GeoPoint(30.0, -82.0), sourceType = PlaceSourceType.GEOCODING)
+        val provider = CompositeMarinePlaceProvider(
+            boatingSources = emptyList(),
+            fallback = FakeProvider(PlaceSearchOutcome.Success(listOf(a, b))),
+        )
+        val result = provider.search("test", bias = null) as PlaceSearchOutcome.Success
+        assertEquals(listOf(a, b), result.candidates)
+    }
+
+    @Test
+    fun `FWC and USACE describing the same physical site collapse into one, FWC keeping priority`() = runBlocking {
+        val fwc = candidate("Cove Park Ramp", location = GeoPoint(28.408, -80.591), sourceType = PlaceSourceType.FWC_BOAT_RAMP)
+        val usaceDuplicate = candidate("Cove Park Recreation Area", location = GeoPoint(28.4081, -80.5911), sourceType = PlaceSourceType.USACE_RECREATION_AREA)
+        val provider = CompositeMarinePlaceProvider(
+            boatingSources = listOf(
+                FakeProvider(PlaceSearchOutcome.Success(listOf(fwc))),
+                FakeProvider(PlaceSearchOutcome.Success(listOf(usaceDuplicate))),
+            ),
+            fallback = FakeProvider(PlaceSearchOutcome.Success(emptyList())),
+        )
+        val result = provider.search("test") as PlaceSearchOutcome.Success
+        assertEquals(listOf(fwc), result.candidates)
+    }
+
+    @Test
+    fun `two distinct ramps from the same source both survive even when very close together`() = runBlocking {
+        val rampOne = candidate("North Ramp", location = GeoPoint(28.4080, -80.5910), sourceType = PlaceSourceType.FWC_BOAT_RAMP)
+        val rampTwo = candidate("South Ramp", location = GeoPoint(28.4081, -80.5911), sourceType = PlaceSourceType.FWC_BOAT_RAMP)
+        val provider = CompositeMarinePlaceProvider(
+            boatingSources = listOf(FakeProvider(PlaceSearchOutcome.Success(listOf(rampOne, rampTwo)))),
+            fallback = FakeProvider(PlaceSearchOutcome.Success(emptyList())),
+        )
+        val result = provider.search("test") as PlaceSearchOutcome.Success
+        assertEquals(2, result.candidates.size)
+    }
 }

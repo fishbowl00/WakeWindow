@@ -1,5 +1,18 @@
 # WakeWindow — Assessment Validation
 
+**Sprint 4 status:** this session's environment had no outbound network access to any provider
+host (`api.weather.gov`, `gis.myfwc.com`, `tidesandcurrents.noaa.gov`, `ndbc.noaa.gov`,
+`services7.arcgis.com`, `photon.komoot.io`, `api.open-meteo.com` were all confirmed
+unreachable), so **no live validation was performed this sprint** and none of the entries below
+were re-captured. Everything Sprint 4 changed (FWC facility fields, search ranking, vessel
+profiles, caching, provider resilience, sunrise/sunset, trip planning) is implemented and
+reasoned through at the source level only. Re-running the exact live validation this document
+already describes for Port Canaveral and Clinton Lake, KS - plus checking the three newly-wired
+FWC fields (`TotalLanes`, `Amenities`, `ContactPhone`) actually populate from real live
+responses - is the mandatory first step once network access is available; see
+[ROADMAP.md](ROADMAP.md) "Next sprint." The Sprint 3 findings below are preserved unmodified as
+the last real, live-verified state.
+
 This document audits WakeWindow's scoring output against real, live provider data rather than
 assuming the arithmetic is correct just because it's internally consistent. Per Sprint 3's own
 mandate, this revision does **not** preserve Sprint 2's conclusions by default - both worked
