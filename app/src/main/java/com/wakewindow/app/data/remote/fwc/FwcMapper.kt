@@ -24,12 +24,25 @@ object FwcMapper {
 
     /** Builds an ArcGIS `where` clause matching [query] against name/water body/city/county -
      * single quotes are doubled (the ArcGIS/SQL escaping convention) so user input can never
-     * break out of the string literal. */
+     * break out of the string literal. [normalizeAbbreviations] expands common city-name
+     * abbreviations first - confirmed live 2026-08-31 that FWC's own `City` field always spells
+     * "Saint"/"Fort" out in full (`SAINT PETERSBURG`, `FORT MYERS`, `FORT LAUDERDALE`, ...),
+     * so a plain substring match against a user-typed "St Petersburg" or "Ft Myers" - a natural,
+     * common way to type either city - would otherwise silently return zero FWC ramps and fall
+     * through entirely to the unranked Photon fallback. */
     fun whereClauseFor(query: String): String {
-        val escaped = query.trim().uppercase().replace("'", "''")
+        val escaped = normalizeAbbreviations(query.trim().uppercase()).replace("'", "''")
         return listOf("RampName", "WaterBodyName", "City", "County")
             .joinToString(" OR ") { field -> "UPPER($field) LIKE '%$escaped%'" }
     }
+
+    private val ST_ABBREVIATION = Regex("\\bST\\b")
+    private val FT_ABBREVIATION = Regex("\\bFT\\b")
+
+    private fun normalizeAbbreviations(uppercasedQuery: String): String =
+        uppercasedQuery.replace(".", "")
+            .replace(ST_ABBREVIATION, "SAINT")
+            .replace(FT_ABBREVIATION, "FORT")
 
     fun mapCandidates(response: FwcQueryResponse): List<MarinePlaceCandidate> =
         response.features.mapNotNull { feature ->
@@ -74,7 +87,7 @@ object FwcMapper {
     fun toFacilityInfo(attributes: FwcAttributes, retrievedAt: Instant = Instant.now()): MarineFacilityInfo {
         val a = attributes
         return MarineFacilityInfo(
-            phone = a.contactPhone?.takeIf { it.isNotBlank() },
+            phone = a.contactPhone?.takeIf { it.isNotBlank() && !it.equals("NA", ignoreCase = true) },
             waterBodyName = a.waterBodyName?.takeIf { it.isNotBlank() },
             rampLanes = a.totalLanes,
             rampType = a.rampType?.takeIf { it.isNotBlank() },

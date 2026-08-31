@@ -381,18 +381,28 @@ Results are cached durably (`DurableCache`, 7-day TTL) — see [CACHE_POLICY.md]
 Only a genuinely successful lookup is cached; "no data" and "failed" outcomes are always
 re-attempted next time.
 
-**Verification caveat, stated honestly:** this session's outbound network access does not
-reach `gis.myfwc.com` (or any other live provider host — see the sprint report), so the three
-newly-added field names (`TotalLanes`, `Amenities`, `ContactPhone`) could not be re-verified
-live against the current schema the way the original fields were on 2026-08-30. They were
-already identified as present in this exact layer during Sprint 3's discovery work (see
-[ROADMAP.md](ROADMAP.md) "Next sprint" / [PLACE_DISCOVERY.md](PLACE_DISCOVERY.md) "What this is
-not," both written from a session that did have live access) — this sprint acts on that
-existing, previously-verified finding rather than a fresh guess. If any of the three field
-names is wrong, the JSON converter (`ignoreUnknownKeys = true`) simply returns `null` for it —
-degrading to `UNKNOWN`/absent, never a fabricated value. Re-verifying live against the current
-schema, and re-confirming `Amenities`' actual delimiter format (to decide whether it's ever
-safe to parse into structured booleans), is a concrete next step once network access allows it.
+**Re-verified live 2026-08-31 (Sprint 4.5 local verification session).** All three field names
+(`TotalLanes` — `esriFieldTypeInteger`, `Amenities` — `esriFieldTypeString`, `ContactPhone` —
+`esriFieldTypeString`) are confirmed present under these exact names in the layer's own
+`?f=json` metadata, and populated in real records (e.g. `OBJECTID 42`, "City of Cocoa Beach
+Country Club Kayak Launch," Brevard County: `TotalLanes: 7`, `Amenities: "Lighting,Picnic"`).
+`Amenities` is confirmed comma-delimited with no surrounding whitespace and Title-Case tokens
+(`Grill`, `Lighting`, `Picnic` observed across a ~240-record sample spanning Brevard,
+Hillsborough, Pinellas, Duval, Miami-Dade, and Indian River counties) — safe to split on `,` if
+structured parsing is ever wanted, though that remains unbuilt this sprint (kept as
+`amenitiesRaw`, per the original rationale below).
+
+**New finding from that same sample:** roughly a quarter of records (54/239) carry the literal
+string `"NA"` for `ContactPhone` rather than leaving the field `null` — the dataset's own
+missing-value convention, the same shape as NDBC's `"MM"` marker above. `FwcMapper.toFacilityInfo`
+now treats `"NA"` (case-insensitive) the same as blank/absent, so it degrades to
+`MarineFacilityInfo.phone == null` rather than showing "NA" as if it were a real (if garbled)
+phone number. `Status`, `RampType`, and `AccessType` vocabularies were also checked against the
+same sample: beyond the two values confirmed in Sprint 3 ("Open for Business"/"Temporarily
+Closed"), live data also includes "Closed with No Further Information," "Closed - Under
+Transition," "Destroyed," and "Permanently Closed" — `FwcMapper.operationalStatusOf`'s
+substring-based classification (matching on `"closed"`/`"removed"`/`"destroyed"`) already
+classifies every one of these correctly with no code change needed.
 
 **Still not attempted, deliberately:** USACE facility-level data (the recreation-areas layer
 integrated for discovery is confirmed, not re-investigated this sprint, to carry no ramp/

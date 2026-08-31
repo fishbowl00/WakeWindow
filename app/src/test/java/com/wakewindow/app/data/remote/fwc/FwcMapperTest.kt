@@ -75,6 +75,30 @@ class FwcMapperTest {
     }
 
     @Test
+    fun `whereClauseFor expands St to Saint so it matches FWC's own city spelling`() {
+        // Confirmed live against gis.myfwc.com on 2026-08-31: FWC's City field is always
+        // "SAINT PETERSBURG," never "ST PETERSBURG" - the abbreviated form a user would
+        // naturally type must still find it.
+        assertTrue(FwcMapper.whereClauseFor("St Petersburg").contains("SAINT PETERSBURG"))
+        assertTrue(FwcMapper.whereClauseFor("St. Petersburg").contains("SAINT PETERSBURG"))
+        assertTrue(FwcMapper.whereClauseFor("Saint Petersburg").contains("SAINT PETERSBURG"))
+    }
+
+    @Test
+    fun `whereClauseFor expands Ft to Fort so it matches FWC's own city spelling`() {
+        // Confirmed live: FWC's City field is "FORT MYERS"/"FORT LAUDERDALE," never "FT ...".
+        assertTrue(FwcMapper.whereClauseFor("Ft Myers").contains("FORT MYERS"))
+        assertTrue(FwcMapper.whereClauseFor("Ft. Lauderdale").contains("FORT LAUDERDALE"))
+    }
+
+    @Test
+    fun `whereClauseFor does not mangle words that merely contain st or ft`() {
+        val clause = FwcMapper.whereClauseFor("Stuart Coast")
+        assertTrue(clause.contains("STUART COAST"))
+        assertTrue(!clause.contains("SAINTUART"))
+    }
+
+    @Test
     fun `whereClauseFor matches across ramp name, water body, city, and county`() {
         val clause = FwcMapper.whereClauseFor("canaveral")
         assertTrue(clause.contains("RampName"))
@@ -128,6 +152,16 @@ class FwcMapperTest {
         assertTrue(facility.hasAnyVerifiedData)
         assertEquals("99", facility.source?.recordId)
         assertTrue(facility.source!!.isOfficial)
+    }
+
+    @Test
+    fun `toFacilityInfo treats FWC's own NA placeholder phone the same as no phone`() {
+        // Confirmed live against gis.myfwc.com on 2026-08-31: roughly a quarter of sampled
+        // records across several Florida counties carry the literal string "NA" for
+        // ContactPhone rather than leaving the field null - showing it verbatim would read as a
+        // real (if garbled) phone number instead of "not available."
+        val facility = FwcMapper.toFacilityInfo(attributes().copy(contactPhone = "NA"))
+        assertNull(facility.phone)
     }
 
     @Test

@@ -18,14 +18,14 @@ import retrofit2.http.Query
  * wires them through for `MarineFacilityInfoProvider`. `OBJECTID` (every ArcGIS layer's
  * standard row identifier) is fetched so a specific ramp record can be re-queried exactly by
  * ID later (see [MarinePlaceCandidate.sourceId]) rather than re-matching fuzzily by name.
- * **Caveat, stated honestly:** this session's outbound network access does not reach
- * `gis.myfwc.com`, so these three additional field names could not be re-verified live against
- * the current schema this sprint the way the original fields were - see
- * docs/DATA_SOURCES.md "Marine place / launch intelligence" for the full caveat. If any of the
- * three doesn't actually exist under this exact name, the DTO field simply comes back `null`
- * (the JSON converter is configured with `ignoreUnknownKeys`, and every field here is
- * nullable), degrading to [com.wakewindow.app.domain.place.FacilityAvailability.UNKNOWN] rather
- * than showing wrong data - never a fabricated value.
+ * Re-verified live against `gis.myfwc.com` 2026-08-31 (Sprint 4.5 local verification) - all
+ * three field names are confirmed present under these exact names and types - see
+ * docs/DATA_SOURCES.md "Marine place / launch intelligence" for the full record, including a
+ * live-observed missing-value convention (`ContactPhone` sometimes literally `"NA"`, handled in
+ * [FwcMapper.toFacilityInfo]). If a field name were ever wrong, the DTO field would simply come
+ * back `null` (the JSON converter is configured with `ignoreUnknownKeys`, and every field here
+ * is nullable), degrading to [com.wakewindow.app.domain.place.FacilityAvailability.UNKNOWN]
+ * rather than showing wrong data - never a fabricated value.
  */
 interface FwcService {
     @GET("mapping/rest/services/Open_Data/FWC_Florida_Boat_Ramp_Inventory/MapServer/4/query")
