@@ -82,6 +82,25 @@ engine is architected around a `VesselProfile` from day one so thresholds are co
 boat, even though the MVP ships with a single sensible default recreational profile and a
 minimal UI for it.
 
+## Facility data states
+
+A launch's facility information (hours, fees, VHF channel, fuel, restrooms, and so on) can be
+in one of four honest states, never collapsed into a single "unknown" or a guessed default:
+
+- **Available** — verified present, with a source.
+- **Not available** — verified absent (confirmed the marina has no fuel dock, say).
+- **Unknown** — nobody has verified this fact yet. This is the default for everything until a
+  real facility-intelligence source is wired in (see [ROADMAP.md](ROADMAP.md) "Launch
+  intelligence"), and it is a genuinely different claim from "not available" — a launch with
+  "Unknown" fuel availability might well have fuel; WakeWindow simply hasn't confirmed it.
+- **Not applicable** — the concept doesn't apply here at all (e.g. "transient slips" at a bare
+  boat ramp with no docking).
+
+`LaunchInfoScreen` renders every field's actual state plainly rather than hiding fields with no
+data or inventing a plausible-sounding default — a launch with entirely unverified facility
+data is not a broken screen, it's an honest one. See [DATA_SOURCES.md](DATA_SOURCES.md)
+"Marine place / launch intelligence" for the provenance model behind this.
+
 ## Safety posture
 
 WakeWindow is a decision-support and planning tool. It is explicitly **not**:

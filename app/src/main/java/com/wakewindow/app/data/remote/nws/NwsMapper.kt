@@ -86,29 +86,56 @@ object NwsMapper {
         response.features.mapNotNull { feature ->
             val p = feature.properties
             val event = p.event ?: return@mapNotNull null
+            val classification = classify(event)
             MarineAlert(
                 id = p.id ?: event,
                 event = event,
                 headline = p.headline,
-                severity = classifySeverity(event),
+                severity = classification.severity,
                 effective = (p.onset ?: p.effective)?.let { runCatching { parseNwsInstant(it) }.getOrNull() },
                 expires = (p.ends ?: p.expires)?.let { runCatching { parseNwsInstant(it) }.getOrNull() },
                 areaDescription = p.areaDesc,
+                vesselSizeExemptApplicable = classification.vesselSizeExemptApplicable,
             )
         }
 
-    /** Classifies by event-text substring, matching RideCast's own hazard-tiering approach
-     * (see docs/RIDECAST_REFERENCE_AUDIT.md section 7), extended with marine event types. */
-    fun classifySeverity(event: String): MarineAlertSeverity {
+    data class AlertClassification(val severity: MarineAlertSeverity, val vesselSizeExemptApplicable: Boolean)
+
+    /**
+     * Classifies by event-text substring, matching RideCast's own hazard-tiering approach
+     * (see docs/RIDECAST_REFERENCE_AUDIT.md section 7), extended with marine event types and
+     * a per-alert vessel-size-exemption flag - see docs/MARINE_SCORING.md "Marine alert
+     * gating" for the full rationale table. Only Small Craft Advisory is size-exempt: a Dense
+     * Fog Advisory, a Gale Warning, or a Severe Thunderstorm Warning is dangerous to a large
+     * vessel too, so those gate every vessel regardless of [VesselProfile.isSmallCraft][com.wakewindow.app.domain.vessel.VesselProfile.isSmallCraft].
+     */
+    fun classify(event: String): AlertClassification {
         val e = event.lowercase()
         return when {
-            "hurricane" in e || "tropical storm" in e || "special marine warning" in e -> MarineAlertSeverity.EXTREME
-            "gale" in e || "storm warning" in e -> MarineAlertSeverity.SEVERE
-            "small craft advisory" in e -> MarineAlertSeverity.ADVISORY
-            "watch" in e -> MarineAlertSeverity.WATCH
-            "warning" in e -> MarineAlertSeverity.SEVERE
-            "advisory" in e -> MarineAlertSeverity.ADVISORY
-            else -> MarineAlertSeverity.UNKNOWN
+            "hurricane" in e || "tropical storm" in e || "special marine warning" in e ->
+                AlertClassification(MarineAlertSeverity.EXTREME, vesselSizeExemptApplicable = false)
+            "severe thunderstorm warning" in e ->
+                // A confirmed, currently-occurring severe convective cell (near-gale gusts +
+                // lightning) is treated as seriously as a formal marine warning - it is a much
+                // stronger signal than the probabilistic thunderstorm forecast already scored
+                // separately in MarinePointScorer.
+                AlertClassification(MarineAlertSeverity.EXTREME, vesselSizeExemptApplicable = false)
+            "gale" in e || "storm warning" in e ->
+                AlertClassification(MarineAlertSeverity.SEVERE, vesselSizeExemptApplicable = false)
+            "small craft advisory" in e ->
+                AlertClassification(MarineAlertSeverity.ADVISORY, vesselSizeExemptApplicable = true)
+            "dense fog" in e ->
+                AlertClassification(MarineAlertSeverity.ADVISORY, vesselSizeExemptApplicable = false)
+            "watch" in e ->
+                AlertClassification(MarineAlertSeverity.WATCH, vesselSizeExemptApplicable = false)
+            "warning" in e ->
+                AlertClassification(MarineAlertSeverity.SEVERE, vesselSizeExemptApplicable = false)
+            "advisory" in e ->
+                AlertClassification(MarineAlertSeverity.ADVISORY, vesselSizeExemptApplicable = false)
+            else -> AlertClassification(MarineAlertSeverity.UNKNOWN, vesselSizeExemptApplicable = false)
         }
     }
+
+    /** Kept for source compatibility with existing call sites/tests that only need the tier. */
+    fun classifySeverity(event: String): MarineAlertSeverity = classify(event).severity
 }

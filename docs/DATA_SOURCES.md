@@ -88,10 +88,17 @@ ISO-8601 interval `validTime` strings**, e.g.
 6-hour span starting at that instant, not a simple per-hour array like `/forecast/hourly`
 returns. Mapping this into hourly `MarineConditions` requires expanding those ISO-8601
 duration intervals, which `/forecast/hourly`'s simpler `periods[]` array never required.
-`GeneralWeatherProvider` (land-oriented fields: temperature, PoP, sky cover) can still prefer
-`/forecast/hourly` when the point is a land point, since that endpoint is simpler and reads
-better for human display; it should fall back to reading the same fields out of
-`forecastGridData` for marine points where `/forecast/hourly` 404s.
+**Implementation note (as actually built):** `NwsProviders` implements both
+`GeneralWeatherProvider` and `MarineForecastProvider` by calling `forecastGridData` exclusively
+— it never calls `/forecast/hourly` at all, for land or marine points. This is a deliberate
+simplification over the "prefer `/forecast/hourly` on land, fall back to `forecastGridData`
+offshore" branching originally considered: since `forecastGridData` already works everywhere
+and gives precise numeric data (vs. `/forecast/hourly`'s human-readable-text periods, which
+would need free-text parsing for thunderstorm/condition classification — see RideCast's own
+regex-based approach in [RIDECAST_REFERENCE_AUDIT.md](RIDECAST_REFERENCE_AUDIT.md)), one grid
+fetch per location serves both provider roles with no land/marine branch to get wrong. The
+`/forecast/hourly` endpoint remains available as a future option if a more human-readable
+`shortForecast`-style condition string is ever wanted for display.
 
 ### Human-readable marine text forecasts live in a separate legacy feed
 
@@ -109,27 +116,68 @@ not built.
 
 `GET /alerts/active?point={lat},{lon}` returns active watches/warnings/advisories for a
 point, including marine-specific products (Small Craft Advisory, Special Marine Warning,
-Gale Warning) when they apply. This is the intended source for `MarineAlertProvider`.
+Gale Warning) when they apply — but also non-marine products (Heat Advisory, Dense Fog
+Advisory, Severe Thunderstorm Warning, etc.) whenever they're active for that location. This
+is the source for `MarineAlertProvider`. WakeWindow's own classification
+(`NwsMapper.classify()`) deliberately does not filter to a marine-only allowlist — see
+[MARINE_SCORING.md](MARINE_SCORING.md) "Gates" for why an unrecognized advisory-tier alert
+still gates the assessment rather than being silently ignored, confirmed live with a real
+Heat Advisory during Sprint 2 testing (see [ASSESSMENT_VALIDATION.md](ASSESSMENT_VALIDATION.md)).
 
 ## NOAA NDBC — National Data Buoy Center
 
 **Role:** observational validation/context only — buoy and coastal station observations, never
-a forecast. Free, no API key, plain-text fixed-width responses (not JSON).
+a forecast. Free, no API key, plain-text fixed-width responses (not JSON). Implemented by
+`NdbcObservationProvider` (`data/remote/ndbc/`).
 
-**Verified format** (`GET https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt`, and the
-per-station `GET https://www.ndbc.noaa.gov/data/realtime2/{station}.txt`): whitespace-aligned
-columns (`WDIR WSPD GST WVHT DPD APD MWD PRES ATMP WTMP DEWP VIS TIDE`, etc.) with **`MM` used
-as the literal missing-value marker** in place of any field a station doesn't report. A naive
-parser that tries to coerce every column to a number will crash or silently produce `0.0` for
-missing data — the mapper must treat `"MM"` as "field not available" and leave the
-corresponding `MarineConditions` property `null`, never `0`.
+**Verified format** (`GET https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt`): one
+whitespace-separated row per currently-reporting station **network-wide** (hundreds of buoys
+and coastal C-MAN stations in a single ~100 KB file), columns `STN LAT LON YYYY MM DD hh mm
+WDIR WSPD GST WVHT DPD APD MWD PRES PTDY ATMP WTMP DEWP VIS TIDE`, with **`MM` used as the
+literal missing-value marker** in place of any field a station doesn't report. `NdbcObservationParser`
+treats `"MM"` as "field not available" and leaves the corresponding property `null`, never
+`0` — confirmed against real stations: `41009` (a met buoy 20 NM off Cape Canaveral) reports
+wind but no wave sensor; `41113` (a nearshore Waverider buoy) reports wave height/period but
+no wind; a naive parser assuming every station has every field would be wrong for most rows in
+this file. Malformed or short lines (a stray header repeat, a truncated row, a non-numeric
+coordinate) are skipped individually rather than failing the whole parse.
 
-**Consequence for `MarineObservationProvider`:** station selection must be distance-aware.
-NDBC stations are sparse and often tens of miles offshore or apart; a naive "nearest station"
-match can return a buoy 60–70 NM away. Every observation surfaced in the UI must carry its
-source station ID, name, distance from the query point, and observation age, and the UI must
-visibly flag both "this is an observation, not a forecast" and "this station is N miles away"
-rather than implying the reading applies at the user's exact launch point.
+Station **names** are not in `latest_obs.txt` (only bare IDs) — `NdbcStationDirectory` does a
+best-effort second lookup against `GET https://www.ndbc.noaa.gov/data/stations/station_table.txt`
+(a separate pipe-delimited file, cached 24h since names essentially never change) to resolve
+e.g. `41009` → "CANAVERAL 20 NM East of Cape Canaveral, FL" for display; a name-lookup failure
+falls back to the bare station ID rather than blocking the observation itself.
+
+### NDBC station selection
+
+`NdbcStationSelector.select()` is **not simply nearest**. Candidates within a 75 NM radius
+(NDBC coverage is sparse enough offshore that "nearest" alone can still return something far
+away — this cutoff is the "useful" distance, matching the product brief's "18 nm away" example
+scale, not an arbitrary round number) are ranked by, in order: freshness tier, then sensor
+capability (a station with both wind and wave data beats one with only one, beats one with
+neither — a wind-only or wave-only station is still selected in preference to nothing), then
+distance. A station reporting a timestamp in the future (clock skew) is rejected outright, not
+trusted. Every selection carries a `selectionReason` string explaining the choice, and the full
+[SelectedMarineStation] record (ID, name, distance, observed time, age, freshness, which
+sensors it has) travels with the result for provenance display — e.g. "CANAVERAL 20 NM East of
+Cape Canaveral, FL · 23 NM away · observed 41 min ago (fresh)," confirmed live.
+
+### NDBC observation freshness policy
+
+NDBC does not publish a single guaranteed reporting interval per station — standard
+meteorological buoys typically report roughly hourly, some coastal (C-MAN) stations more often
+(observed live: several stations reporting 8-30 minutes apart). Given that variability, the
+policy is set with headroom above one normal cycle rather than pinned to an exact SLA:
+
+| Tier | Age | Treatment |
+|---|---|---|
+| `FRESH` | ≤ 45 min | Used at full confidence weight; eligible for forecast/observation disagreement detection |
+| `AGING` | 45–90 min | Has likely missed one expected report; still used, confidence capped at `MEDIUM` |
+| `STALE` | 90–180 min | Multiple missed cycles; treated as historical context only — excluded from disagreement detection, confidence capped at `LOW`, but still shown for provenance ("last report N min ago") |
+| `UNUSABLE` | > 180 min | Excluded from both scoring input and disagreement detection entirely; the station may still be *selected* (nothing closer/fresher exists) so its age is visible, but its reading is never presented as current |
+
+A stale/unusable observation never masquerades as a current reading — see
+[MARINE_SCORING.md](MARINE_SCORING.md) "Forecast vs. observation."
 
 **License/attribution:** U.S. government public data.
 
@@ -159,7 +207,11 @@ predictions/observations. Free, no API key.
 **Consequence:** tide/current data must always be labeled with the source station's name and
 distance from the plan location; it must never be presented as if it were measured exactly at
 the user's ramp when the nearest station is materially distant (a threshold worth encoding
-explicitly in confidence calculation, not left implicit).
+explicitly in confidence calculation, not left implicit). `CoopsTideProvider` enforces a 150 NM
+cutoff — a station farther than that is treated as `TideStationOutcome.NotTidal` rather than a
+distant-but-technically-found station, since CO-OPS's ~3,500-station tide-prediction list has
+gaps large enough (interior lakes, some stretches of coastline) that "nearest" alone can still
+return something not meaningfully representative of the query point.
 
 **License/attribution:** U.S. government public data.
 
@@ -197,24 +249,55 @@ Open-Meteo.com") required; see the commercial constraint above for production us
 ## Marine place / launch intelligence — discovery vs. verified facility data
 
 No single free API supplies both "where is this marina" and "what's its ramp fee, VHF
-channel, and gate hours." This sprint deliberately keeps those two concerns architecturally
-separate (`MarinePlaceProvider` for discovery/geocoding vs. a provenance-tracked
-`MarinePlace` facility record — see [ARCHITECTURE.md](ARCHITECTURE.md) and
-[MARINE_SCORING.md](MARINE_SCORING.md) are not the place for this, see the `MarinePlace`
-section of `ARCHITECTURE.md`). RideCast's existing Geoapify/Photon geocoding integration is a
-reasonable starting point for place *discovery* (name/address/coordinates), reused behind a
-`MarinePlacePlaceholder` — but every authoritative operational field (fees, hours, VHF
-channel, restrictions) is out of scope for automated discovery this sprint and is modeled as
-explicitly absent (`"Not available"`) rather than guessed, each with a `SourceReference` seam
-ready for when a verified data source is chosen.
+channel, and gate hours." This is kept as two architecturally separate concerns:
+`MarinePlaceProvider` (Photon, discovery only — name/address/coordinates/guessed type) and
+`MarineFacilityInfo` (a provenance-tracked record with an explicit `FacilityAvailability`
+state — `AVAILABLE`/`NOT_AVAILABLE`/`UNKNOWN`/`NOT_APPLICABLE` — per amenity field, so "we
+don't know" is never conflated with "no"). See [PRODUCT.md](PRODUCT.md) "Facility data
+states" and [ARCHITECTURE.md](ARCHITECTURE.md) for the full model.
+
+**No facility-intelligence provider ships this sprint, deliberately.** `MarineFacilityInfoProvider`
+is a defined interface with zero implementations — per the sprint brief, an uncontrolled web
+scraper against arbitrary marina/harbor websites is explicitly out of scope (fragile, legally
+murky, unmaintainable at any scale). `LaunchInfoScreen` is built to render `MarineFacilityInfo`'s
+all-`UNKNOWN`/all-null default state honestly (confirmed live — see
+[ASSESSMENT_VALIDATION.md](ASSESSMENT_VALIDATION.md)), so wiring in a real source later is
+additive, not a UI rewrite. Plausible future controlled sources, not yet evaluated in depth:
+official port/harbor-authority sites (`SourceType.OFFICIAL_PORT`), state boating-access agency
+datasets (`SourceType.STATE_AGENCY`), USACE lake/reservoir facility data
+(`SourceType.USACE`) for Corps-managed lakes, and marina-operator-published data where a
+marina explicitly opts in (`SourceType.MARINA_OPERATOR`). Each would need its own licensing/ToS
+review before integration — none is assumed usable yet.
+
+## Provider licensing summary
+
+| Provider | Data | Public/open govt. data? | Attribution required? | Rate-limited? | Commercially usable as configured? |
+|---|---|---|---|---|---|
+| NWS (`api.weather.gov`) | General + marine forecast, alerts | Yes | No (courtesy `User-Agent` requested, not legally required) | Soft — descriptive `User-Agent` requested, no published hard quota | Yes |
+| NOAA NDBC | Buoy/station observations | Yes | No | No published quota; the `latest_obs.txt` snapshot is fetched and cached client-side (10 min TTL) specifically to avoid hammering it | Yes |
+| NOAA CO-OPS | Tide predictions, station metadata | Yes | No | No published quota for this volume of use | Yes |
+| Photon (`photon.komoot.io`) | Place search/geocoding | No — public demo instance of an open-source project, not government data | Attribution to OpenStreetMap contributors is good practice | Yes — a shared public demo instance with no documented SLA; RideCast's own docs flag this same instance as a P0 risk before any public beta (see [RIDECAST_REFERENCE_AUDIT.md](RIDECAST_REFERENCE_AUDIT.md)) | **No** — a shared free demo instance is not an appropriate production dependency at any real user volume; see "Scale and Provider Risk" in [ROADMAP.md](ROADMAP.md) |
+| Open-Meteo (general + Marine) | Supplementary general/marine forecast | No — a commercial product with a free tier | Yes, on the free tier (CC BY 4.0) | Yes, documented free-tier volume limits | **No** — free tier is documented as non-commercial/development use; see below |
+
+No conclusion above goes beyond what each provider's own published documentation states: this
+is a summary of stated terms, not independent legal advice, and the two "No" rows should be
+revisited with real licensing/contractual review before any commercial release rather than
+treated as a permanent architectural fact.
 
 ## Fallback behavior (cross-cutting)
 
 - If a preferred provider fails or times out, the repository layer surfaces a
   provider-specific failure to the scoring engine rather than silently substituting a
   different provider's numbers without labeling the source change.
+- **A failed check is never presented as a successful check that found nothing.** This was a
+  real Sprint 1 gap, fixed in Sprint 2: a failed marine-alert fetch used to be indistinguishable
+  from "checked, zero alerts active." It now downgrades confidence explicitly
+  ("Marine alert status could not be verified") rather than silently reading as a clean bill of
+  health — see [ASSESSMENT_VALIDATION.md](ASSESSMENT_VALIDATION.md) "Missing data policy" for
+  the full audit of this class of bug.
 - Every value that reaches the UI is paired with a `source` and, where applicable, an
   `observationAge`/`confidence` — see [MARINE_SCORING.md](MARINE_SCORING.md).
 - No provider failure is allowed to crash the assessment for the whole plan — a missing
   marine layer degrades the confidence of the overall `BoatingAssessment` rather than
-  producing no result at all (see the inland-lake case in [ROADMAP.md](ROADMAP.md)).
+  producing no result at all (see the inland-lake case in [ROADMAP.md](ROADMAP.md), and the
+  live Clinton Lake, KS validation in [ASSESSMENT_VALIDATION.md](ASSESSMENT_VALIDATION.md)).

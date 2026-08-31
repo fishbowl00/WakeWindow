@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -12,10 +13,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -33,13 +35,20 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.wakewindow.app.domain.model.ConfidenceLevel
+import com.wakewindow.app.domain.observation.MarineDisagreement
+import com.wakewindow.app.domain.observation.ObservationFreshness
+import com.wakewindow.app.domain.observation.SelectedMarineStation
+import com.wakewindow.app.domain.scoring.BestWindow
 import com.wakewindow.app.domain.scoring.BoatingWindowAssessment
+import com.wakewindow.app.domain.scoring.EvidenceItem
 import com.wakewindow.app.domain.scoring.Hazard
 import com.wakewindow.app.domain.scoring.PointAssessment
 import com.wakewindow.app.domain.scoring.severityRank
+import com.wakewindow.app.domain.tide.TideTrend
 import com.wakewindow.app.ui.WakeWindowUiState
 import com.wakewindow.app.ui.theme.label
 import com.wakewindow.app.ui.theme.toColor
@@ -98,30 +107,20 @@ fun AssessmentScreen(
 private fun AssessmentContent(assessment: BoatingWindowAssessment, zoneId: ZoneId) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+        contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         item { OverallCard(assessment) }
-        assessment.bestWindow?.let { window ->
-            item {
-                InfoCard(title = "Best boating window") {
-                    Text(
-                        "${formatTime(window.start, zoneId)} - ${formatTime(window.end, zoneId)}",
-                        style = MaterialTheme.typography.titleLarge,
-                    )
-                    Text(
-                        "Average score ${window.averageScore}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
+        assessment.bestWindow?.let { window -> item { BestWindowCard(window, zoneId) } }
         item { ConditionsGrid(assessment.departureAssessment) }
         item { WindowBreakdownCard(assessment) }
         if (assessment.worstHazards.isNotEmpty()) {
             item { HazardsCard(assessment.worstHazards, zoneId) }
         }
+        if (assessment.disagreements.isNotEmpty()) {
+            item { DisagreementsCard(assessment.disagreements) }
+        }
+        assessment.nearestObservationStation?.let { station -> item { ObservationStationCard(station) } }
         item { ConfidenceCard(assessment) }
         item { SafetyFooter() }
     }
@@ -169,13 +168,46 @@ private fun OverallCard(assessment: BoatingWindowAssessment) {
     }
 }
 
+/**
+ * "Best Window" only appears as a distinct recommendation when it's genuinely different from
+ * what the user already planned - see docs/MARINE_SCORING.md "Best Window." When the planned
+ * window already is the best window, this says so plainly instead of implying a better option
+ * exists.
+ */
 @Composable
-private fun InfoCard(title: String, content: @Composable () -> Unit) {
+private fun BestWindowCard(window: BestWindow, zoneId: ZoneId) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Text(title, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(modifier = Modifier.height(4.dp))
-            content()
+            if (window.matchesPlannedWindow) {
+                Text("Your planned window is excellent", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    "${formatTime(window.start, zoneId)} - ${formatTime(window.end, zoneId)} stays GOOD or better the whole time.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            } else {
+                Text("Best window", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    "${formatTime(window.start, zoneId)} - ${formatTime(window.end, zoneId)}",
+                    style = MaterialTheme.typography.titleLarge,
+                )
+                window.recommendReturnBy?.let {
+                    Text(
+                        "Return by ${formatTime(it, zoneId)} recommended",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.tertiary,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+            if (window.reasons.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("Why", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                window.reasons.forEach {
+                    Text("• $it", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 2.dp))
+                }
+            }
         }
     }
 }
@@ -190,11 +222,23 @@ private fun ConditionsGrid(point: PointAssessment) {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 MetricColumn("Wind", c?.sustainedWindKts?.let { "${it.roundToInt()} kt" } ?: "—", c?.gustKts?.let { "Gusts ${it.roundToInt()} kt" })
                 MetricColumn("Seas", c?.waveHeightFt?.let { "${String.format("%.1f", it)} ft" } ?: "—", c?.wavePeriodSec?.let { "${it.roundToInt()}s period" })
-                MetricColumn("Tide", c?.tideTrend?.name?.lowercase(Locale.getDefault())?.replaceFirstChar { it.uppercase() } ?: "—", c?.tideHeightFt?.let { "${String.format("%.1f", it)} ft" })
+                MetricColumn(
+                    "Tide",
+                    c?.tideHeightFt?.let { "${String.format("%.1f", it)} ft" } ?: "Not tidal",
+                    c?.tideTrend?.label(),
+                )
                 MetricColumn("Storm", c?.thunderstormProbabilityPercent?.let { "$it%" } ?: "—", null)
             }
         }
     }
+}
+
+private fun TideTrend.label(): String = when (this) {
+    TideTrend.RISING -> "Rising"
+    TideTrend.FALLING -> "Falling"
+    TideTrend.NEAR_HIGH -> "Near high"
+    TideTrend.NEAR_LOW -> "Near low"
+    TideTrend.UNKNOWN -> "Unknown"
 }
 
 @Composable
@@ -259,18 +303,75 @@ private fun HazardsCard(hazards: List<Hazard>, zoneId: ZoneId) {
 }
 
 @Composable
+private fun DisagreementsCard(disagreements: List<MarineDisagreement>) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Forecast vs. observed", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(modifier = Modifier.height(8.dp))
+            disagreements.forEach {
+                Text("• ${it.message}", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 2.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun ObservationStationCard(station: SelectedMarineStation) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Nearby observation", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(station.name ?: station.stationId, style = MaterialTheme.typography.titleMedium)
+            Text(
+                "${String.format("%.0f", station.distanceNm)} NM away · observed ${station.ageMinutes} min ago (${station.freshness.label()})",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+private fun ObservationFreshness.label(): String = when (this) {
+    ObservationFreshness.FRESH -> "fresh"
+    ObservationFreshness.AGING -> "aging"
+    ObservationFreshness.STALE -> "stale"
+    ObservationFreshness.UNUSABLE -> "too old to use"
+}
+
+@Composable
 private fun ConfidenceCard(assessment: BoatingWindowAssessment) {
     val confidence = assessment.confidence
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                "Data confidence: ${confidence.level.displayName()}",
+                "${confidence.level.displayName().uppercase(Locale.getDefault())} CONFIDENCE",
                 style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
             )
-            confidence.reasons.forEach {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (assessment.evidence.items.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("Based on", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                assessment.evidence.items.forEach { EvidenceRow(it) }
+            }
+            val limitations = assessment.evidence.limitations + confidence.reasons
+            if (limitations.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("Limitations", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                limitations.distinct().forEach {
+                    Text("• $it", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 2.dp))
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun EvidenceRow(item: EvidenceItem) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
+        val icon = if (item.available) Icons.Filled.Check else Icons.Filled.Close
+        val tint: Color = if (item.available) com.wakewindow.app.ui.theme.CategoryColors.Good else MaterialTheme.colorScheme.onSurfaceVariant
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(16.dp))
+        Text(item.label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = 6.dp))
     }
 }
 

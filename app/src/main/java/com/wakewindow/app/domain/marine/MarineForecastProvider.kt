@@ -16,15 +16,3 @@ interface MarineForecastProvider {
 
     suspend fun hourlyMarineForecast(location: GeoPoint, start: Instant, end: Instant): ForecastOutcome
 }
-
-/**
- * Observational (not forecast) marine data from a physical station - e.g. an NDBC buoy. No
- * implementation ships this sprint (see docs/ROADMAP.md); the interface exists so
- * [com.wakewindow.app.domain.scoring.MarineScoreEngine] and confidence calculation are ready
- * for it.
- */
-interface MarineObservationProvider {
-    val providerName: String
-
-    suspend fun nearestObservation(location: GeoPoint): ForecastOutcome
-}

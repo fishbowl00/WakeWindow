@@ -1,6 +1,8 @@
 package com.wakewindow.app.domain.scoring
 
 import com.wakewindow.app.domain.model.Confidence
+import com.wakewindow.app.domain.observation.MarineDisagreement
+import com.wakewindow.app.domain.observation.SelectedMarineStation
 import java.time.Instant
 
 /** Home-screen headline number/category plus the specific reasons driving it - never a
@@ -11,10 +13,32 @@ data class OverallAssessment(
     val reasons: List<Hazard>,
 )
 
+/**
+ * See docs/MARINE_SCORING.md "Best Window." [matchesPlannedWindow] is true when this span is
+ * (approximately) the same as what the user already planned - in that case the UI must not
+ * call it "Best Window" as if a better alternative exists; it should say the planned window
+ * itself is good. [reasons] and [recommendReturnBy] are generated deterministically from the
+ * scored points, never hand-written prose.
+ */
 data class BestWindow(
     val start: Instant,
     val end: Instant,
     val averageScore: Int,
+    val reasons: List<String>,
+    val matchesPlannedWindow: Boolean,
+    /** Set when conditions are expected to deteriorate before the plan's own return time -
+     * the last point still GOOD-or-better before that happens. Null when the planned return
+     * is already within (or before) the good window. */
+    val recommendReturnBy: Instant?,
+)
+
+/** One line of evidence that did or didn't contribute to this assessment, for the confidence
+ * explanation UI - see docs/MARINE_SCORING.md "Confidence." */
+data class EvidenceItem(val label: String, val available: Boolean)
+
+data class ConfidenceEvidence(
+    val items: List<EvidenceItem>,
+    val limitations: List<String>,
 )
 
 /**
@@ -30,6 +54,9 @@ data class BoatingWindowAssessment(
     val bestWindow: BestWindow?,
     val worstHazards: List<Hazard>,
     val confidence: Confidence,
+    val evidence: ConfidenceEvidence = ConfidenceEvidence(emptyList(), emptyList()),
+    val nearestObservationStation: SelectedMarineStation? = null,
+    val disagreements: List<MarineDisagreement> = emptyList(),
 ) {
     val allPoints: List<PointAssessment> get() =
         listOf(departureAssessment) + underwayAssessments + returnAssessment

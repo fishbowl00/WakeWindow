@@ -51,12 +51,13 @@ object MarinePointScorer {
                     hazards += Hazard(HazardType.MARINE_ALERT_SEVERE, "${alert.event} in effect", conditions.timestamp, categoryCap = BoatingCategory.POOR)
                 }
                 MarineAlertSeverity.ADVISORY -> {
-                    if (vessel.isSmallCraft) {
-                        applyGate(BoatingCategory.CAUTION)
-                        hazards += Hazard(HazardType.MARINE_ALERT_ADVISORY, "${alert.event} in effect", conditions.timestamp, categoryCap = BoatingCategory.CAUTION)
-                    } else {
+                    val exempt = alert.vesselSizeExemptApplicable && !vessel.isSmallCraft
+                    if (exempt) {
                         deduction += 10.0
                         hazards += Hazard(HazardType.MARINE_ALERT_ADVISORY, "${alert.event} in effect (vessel exceeds small-craft size)", conditions.timestamp)
+                    } else {
+                        applyGate(BoatingCategory.CAUTION)
+                        hazards += Hazard(HazardType.MARINE_ALERT_ADVISORY, "${alert.event} in effect", conditions.timestamp, categoryCap = BoatingCategory.CAUTION)
                     }
                 }
                 MarineAlertSeverity.WATCH, MarineAlertSeverity.UNKNOWN -> {
@@ -176,14 +177,40 @@ object MarinePointScorer {
         return fraction * maxPenalty
     }
 
+    /**
+     * A missing field must never silently read as "conditions must be fine" - see
+     * docs/ASSESSMENT_VALIDATION.md "Missing data policy." This never adds a scoring
+     * deduction for a missing field (an inland lake with no wave sensor isn't being
+     * penalized for waves that don't exist there); it only ever reduces how much the
+     * resulting score should be trusted, and always says exactly which evidence is missing.
+     */
     private fun pointConfidence(conditions: MarineConditions, hasHazards: Boolean): Confidence {
-        val base = conditions.confidence
-        if (base.level == ConfidenceLevel.HIGH && !conditions.hasAnyMarineData) {
-            // General weather only (e.g. inland lake) - never claim full confidence about
-            // marine conditions we have no data for at all.
-            return Confidence(ConfidenceLevel.MEDIUM, listOf("No marine (wave/tide) data available for this location"))
+        var level = conditions.confidence.level
+        val reasons = conditions.confidence.reasons.toMutableList()
+
+        if (level == ConfidenceLevel.HIGH && !conditions.hasAnyMarineData) {
+            level = ConfidenceLevel.MEDIUM
+            reasons += "No marine (wave/tide) data available for this location"
         }
-        return base
+
+        val missingCore = buildList {
+            if (conditions.sustainedWindKts == null) add("wind")
+            if (conditions.waveHeightFt == null) add("wave height")
+            if (conditions.thunderstormProbabilityPercent == null) add("thunderstorm risk")
+            if (conditions.visibilityNm == null) add("visibility")
+        }
+        if (missingCore.size >= 3) {
+            // Most of the safety-relevant evidence this hour's score would be based on is
+            // simply absent - a POOR/EXCELLENT verdict from what little remains isn't
+            // trustworthy, so this is LOW, not merely MEDIUM.
+            level = if (level.ordinal < ConfidenceLevel.LOW.ordinal) ConfidenceLevel.LOW else level
+            reasons += "Missing ${missingCore.joinToString(", ")} for this hour"
+        } else if (missingCore.isNotEmpty()) {
+            level = if (level.ordinal < ConfidenceLevel.MEDIUM.ordinal) ConfidenceLevel.MEDIUM else level
+            reasons += "Missing ${missingCore.joinToString(", ")} for this hour"
+        }
+
+        return Confidence(level, reasons.distinct())
     }
 
     private fun formatFeet(value: Double): String = "${String.format("%.1f", value)} ft"

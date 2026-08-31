@@ -10,6 +10,7 @@ import androidx.navigation.compose.rememberNavController
 import com.wakewindow.app.ui.WakeWindowViewModel
 import com.wakewindow.app.ui.about.AboutScreen
 import com.wakewindow.app.ui.assessment.AssessmentScreen
+import com.wakewindow.app.ui.launchinfo.LaunchInfoScreen
 import com.wakewindow.app.ui.launchlist.LaunchListScreen
 import com.wakewindow.app.ui.launchsearch.LaunchSearchScreen
 import com.wakewindow.app.ui.planboat.PlanBoatScreen
@@ -30,6 +31,10 @@ fun WakeWindowNavHost(
                 onOpenLaunch = { launch ->
                     viewModel.selectSavedLaunch(launch)
                     navController.navigate(WakeWindowDestinations.PLAN)
+                },
+                onOpenLaunchInfo = { launch ->
+                    viewModel.viewLaunchInfo(launch)
+                    navController.navigate(WakeWindowDestinations.LAUNCH_INFO)
                 },
                 onOpenSettings = { navController.navigate(WakeWindowDestinations.SETTINGS) },
                 onOpenAbout = { navController.navigate(WakeWindowDestinations.ABOUT) },
@@ -64,6 +69,11 @@ fun WakeWindowNavHost(
                 onRefresh = viewModel::runAssessment,
                 onBack = { navController.popBackStack() },
             )
+        }
+        composable(WakeWindowDestinations.LAUNCH_INFO) {
+            state.infoLaunch?.let { launch ->
+                LaunchInfoScreen(place = launch.place, onBack = { navController.popBackStack() })
+            }
         }
         composable(WakeWindowDestinations.SETTINGS) {
             SettingsScreen(onBack = { navController.popBackStack() })

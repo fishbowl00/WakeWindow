@@ -3,6 +3,7 @@ package com.wakewindow.app.data.remote.nws
 import com.wakewindow.app.domain.model.GeoPoint
 import com.wakewindow.app.domain.model.SourceReference
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -81,6 +82,33 @@ class NwsMapperTest {
         assertEquals(com.wakewindow.app.domain.alert.MarineAlertSeverity.SEVERE, NwsMapper.classifySeverity("Gale Warning"))
         assertEquals(com.wakewindow.app.domain.alert.MarineAlertSeverity.ADVISORY, NwsMapper.classifySeverity("Small Craft Advisory"))
         assertEquals(com.wakewindow.app.domain.alert.MarineAlertSeverity.WATCH, NwsMapper.classifySeverity("Coastal Flood Watch"))
+    }
+
+    @Test
+    fun `small craft advisory is classified as vessel-size exempt`() {
+        val classification = NwsMapper.classify("Small Craft Advisory")
+        assertEquals(com.wakewindow.app.domain.alert.MarineAlertSeverity.ADVISORY, classification.severity)
+        assertTrue(classification.vesselSizeExemptApplicable)
+    }
+
+    @Test
+    fun `dense fog advisory is classified as NOT vessel-size exempt - fog is dangerous to any size vessel`() {
+        val classification = NwsMapper.classify("Dense Fog Advisory")
+        assertEquals(com.wakewindow.app.domain.alert.MarineAlertSeverity.ADVISORY, classification.severity)
+        assertFalse(classification.vesselSizeExemptApplicable)
+    }
+
+    @Test
+    fun `severe thunderstorm warning is classified as EXTREME, more serious than a generic warning`() {
+        val classification = NwsMapper.classify("Severe Thunderstorm Warning")
+        assertEquals(com.wakewindow.app.domain.alert.MarineAlertSeverity.EXTREME, classification.severity)
+    }
+
+    @Test
+    fun `gale warning is classified as SEVERE and not vessel-size exempt`() {
+        val classification = NwsMapper.classify("Gale Warning")
+        assertEquals(com.wakewindow.app.domain.alert.MarineAlertSeverity.SEVERE, classification.severity)
+        assertFalse(classification.vesselSizeExemptApplicable)
     }
 
     @Test

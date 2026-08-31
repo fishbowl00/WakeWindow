@@ -17,6 +17,9 @@ data class WakeWindowUiState(
     val searchError: String? = null,
 
     val activeLaunch: SavedLaunch? = null,
+    /** Independent of [activeLaunch] - viewing a launch's facility info must never disturb an
+     * in-progress plan for a different (or the same) launch. */
+    val infoLaunch: SavedLaunch? = null,
     val departureTime: Instant? = null,
     val returnTime: Instant? = null,
     val zoneId: ZoneId = ZoneId.systemDefault(),

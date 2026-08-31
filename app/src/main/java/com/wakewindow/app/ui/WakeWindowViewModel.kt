@@ -78,6 +78,10 @@ class WakeWindowViewModel(application: Application) : AndroidViewModel(applicati
         viewModelScope.launch { activateLaunch(launch) }
     }
 
+    fun viewLaunchInfo(launch: SavedLaunch) {
+        _uiState.update { it.copy(infoLaunch = launch) }
+    }
+
     private suspend fun activateLaunch(launch: SavedLaunch) {
         val zone = AppDependencies.nwsProviders.resolveZoneId(launch.place.location)
         val now = Instant.now().atZone(zone)

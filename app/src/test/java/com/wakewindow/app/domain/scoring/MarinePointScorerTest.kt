@@ -48,7 +48,7 @@ class MarinePointScorerTest {
         confidence = Confidence.high(),
     )
 
-    private fun alert(severity: MarineAlertSeverity, event: String = severity.name) = MarineAlert(
+    private fun alert(severity: MarineAlertSeverity, event: String = severity.name, vesselSizeExemptApplicable: Boolean = false) = MarineAlert(
         id = "test-$severity",
         event = event,
         headline = null,
@@ -56,6 +56,7 @@ class MarinePointScorerTest {
         effective = at.minusSeconds(3600),
         expires = at.plusSeconds(3600),
         areaDescription = null,
+        vesselSizeExemptApplicable = vesselSizeExemptApplicable,
     )
 
     @Test
@@ -143,7 +144,7 @@ class MarinePointScorerTest {
         val smallVessel = defaultVessel.copy(isSmallCraft = true)
         val result = MarinePointScorer.score(
             defaultSample,
-            conditions(windKts = 5.0, waveFt = 0.5, alerts = listOf(alert(MarineAlertSeverity.ADVISORY, "Small Craft Advisory"))),
+            conditions(windKts = 5.0, waveFt = 0.5, alerts = listOf(alert(MarineAlertSeverity.ADVISORY, "Small Craft Advisory", vesselSizeExemptApplicable = true))),
             smallVessel,
         )
         assertEquals(BoatingCategory.CAUTION, result.category)
@@ -154,7 +155,7 @@ class MarinePointScorerTest {
         val largeVessel = defaultVessel.copy(isSmallCraft = false)
         val result = MarinePointScorer.score(
             defaultSample,
-            conditions(windKts = 5.0, waveFt = 0.5, alerts = listOf(alert(MarineAlertSeverity.ADVISORY, "Small Craft Advisory"))),
+            conditions(windKts = 5.0, waveFt = 0.5, alerts = listOf(alert(MarineAlertSeverity.ADVISORY, "Small Craft Advisory", vesselSizeExemptApplicable = true))),
             largeVessel,
         )
         // Calm underlying conditions plus a 10-point deduction should still clear CAUTION's

@@ -30,7 +30,7 @@ object MarineScoreEngine {
         }
 
         val overall = computeOverall(departure, underway, returnPoint)
-        val bestWindow = BestWindowFinder.find(points)
+        val bestWindow = BestWindowFinder.find(points, departure.at, returnPoint.at)
         val worstHazards = rankHazards(points, returnPoint.at)
         val confidence = points.map { it.confidence }.reduceOrNull { a, b -> a.worstOf(b) }
             ?: departure.confidence

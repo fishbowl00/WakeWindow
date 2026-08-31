@@ -1,6 +1,5 @@
 package com.wakewindow.app.ui.launchlist
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -45,6 +44,7 @@ fun LaunchListScreen(
     state: WakeWindowUiState,
     onAddLaunch: () -> Unit,
     onOpenLaunch: (SavedLaunch) -> Unit,
+    onOpenLaunchInfo: (SavedLaunch) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenAbout: () -> Unit,
 ) {
@@ -85,7 +85,11 @@ fun LaunchListScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 items(state.savedLaunches, key = { it.id }) { launch ->
-                    LaunchCard(launch = launch, onClick = { onOpenLaunch(launch) })
+                    LaunchCard(
+                        launch = launch,
+                        onClick = { onOpenLaunch(launch) },
+                        onInfoClick = { onOpenLaunchInfo(launch) },
+                    )
                 }
             }
         }
@@ -141,12 +145,10 @@ private fun EmptyLaunchList(modifier: Modifier = Modifier, onAddLaunch: () -> Un
 }
 
 @Composable
-private fun LaunchCard(launch: SavedLaunch, onClick: () -> Unit) {
+private fun LaunchCard(launch: SavedLaunch, onClick: () -> Unit, onInfoClick: () -> Unit) {
     Card(
         onClick = onClick,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
+        modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     ) {
         Row(
@@ -158,11 +160,18 @@ private fun LaunchCard(launch: SavedLaunch, onClick: () -> Unit) {
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.secondary,
             )
-            Column(modifier = Modifier.padding(start = 16.dp)) {
+            Column(
+                modifier = Modifier
+                    .padding(start = 16.dp)
+                    .weight(1f),
+            ) {
                 Text(launch.place.name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
                 launch.place.discovery.address?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+            }
+            IconButton(onClick = onInfoClick) {
+                Icon(Icons.Filled.Info, contentDescription = "Launch information for ${launch.place.name}", tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }

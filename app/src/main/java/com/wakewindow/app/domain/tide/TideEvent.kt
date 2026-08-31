@@ -4,7 +4,14 @@ import java.time.Instant
 
 enum class TideEventType { HIGH, LOW }
 
-enum class TideTrend { RISING, FALLING, SLACK_AT_HIGH, SLACK_AT_LOW }
+/**
+ * Always one of these five explicit states - never left null/blank for a UI to render as an
+ * unexplained dash. See docs/MARINE_SCORING.md "Tide trend" for when each applies. UNKNOWN is
+ * reserved for the genuine case of no bracketing tide-event data at all (e.g. the requested
+ * hour falls outside the fetched day's predictions); it is not a fallback for "didn't bother
+ * to compute."
+ */
+enum class TideTrend { RISING, FALLING, NEAR_HIGH, NEAR_LOW, UNKNOWN }
 
 /** A single predicted high or low tide event at a specific station. */
 data class TideEvent(

@@ -35,40 +35,53 @@ than the newest available majors:
 ```
 com.wakewindow.app
 ├── domain/                     — pure Kotlin. No android.*/androidx.* imports, ever.
-│   ├── model/                  — GeoPoint, SourceReference, Confidence, Units
-│   ├── marine/                 — MarineConditions and its component value types
-│   ├── weather/                — GeneralWeatherProvider, WeatherForecast/Hour
-│   ├── tide/                   — TideProvider, CurrentProvider, TideEvent, station models
-│   ├── alert/                  — MarineAlertProvider, MarineAlert
-│   ├── place/                  — MarinePlace, MarinePlaceProvider, SavedLaunch
+│   ├── model/                  — GeoPoint, SourceReference (+ SourceType), Confidence, Units
+│   ├── marine/                 — MarineConditions, MarineForecastProvider
+│   ├── weather/                — GeneralWeatherProvider, ForecastOutcome (shared by general + marine fetches)
+│   ├── tide/                   — TideProvider, CurrentProvider, TideEvent/TideTrend, TideTimeline, station models
+│   ├── alert/                  — MarineAlertProvider, MarineAlert, AlertTiming
+│   ├── observation/             — MarineObservationProvider, SelectedMarineStation,
+│   │                              ObservationFreshness, MarineDisagreement(Detector)
+│   ├── place/                  — MarinePlace, MarineFacilityInfo (+ FacilityAvailability),
+│   │                              MarinePlaceProvider, MarineFacilityInfoProvider (no impl yet), SavedLaunch(Repository)
 │   ├── vessel/                 — VesselProfile, VesselType, presets
-│   ├── route/                  — RouteSample, RouteSampleRole, BoatingPlan
+│   ├── route/                  — RouteSample, RouteSampleRole, BoatingPlan, BoatingRepository
 │   ├── consensus/               — multi-provider merge for MarineConditions
 │   ├── scoring/                 — BoatingCategory, Hazard, PointAssessment,
-│   │                              BoatingWindowAssessment, MarineScoreEngine
-│   └── settings/                — AppSettings, unit preference
+│   │                              BoatingWindowAssessment, BestWindow, ConfidenceEvidence,
+│   │                              MarineScoreEngine, MarinePointScorer, BestWindowFinder
+│   └── settings/                — AppSettings, AppearanceMode, unit preference
 ├── data/
 │   ├── remote/
-│   │   ├── nws/                 — points → grid → forecastGridData / forecast/hourly / alerts
+│   │   ├── nws/                 — points → grid → forecastGridData (general + marine + alerts, one fetch)
 │   │   ├── openmeteo/           — general + marine (dev-only, license-gated - see DATA_SOURCES.md)
 │   │   ├── coops/                — NOAA CO-OPS tide predictions + station metadata
+│   │   ├── ndbc/                 — NOAA NDBC buoy observations: parser, station selector/directory, provider
 │   │   └── photon/               — keyless place search
-│   ├── local/                    — Room: SavedLaunchEntity, VesselProfileEntity, AppConfigEntity
+│   ├── local/                    — Room: SavedLaunchEntity
 │   ├── mapper/                   — DTO → domain, one file per provider
-│   └── repository/               — provider fan-out + cache decorators, implements domain interfaces
+│   └── repository/               — DefaultBoatingRepository (provider fan-out + consensus + disagreement),
+│                                    RoomSavedLaunchRepository
 ├── ui/
-│   ├── theme/                    — WakeWindowTheme, AppearanceMode, CategoryColors
+│   ├── theme/                    — WakeWindowTheme, AppearanceMode resolution, CategoryColors
 │   ├── splash/                   — InknautSplashScreen
 │   ├── navigation/                — WakeWindowNavHost, route constants
-│   ├── home/                      — today's assessment for the active saved launch
-│   ├── planboat/                  — launch + departure + return time selection flow
+│   ├── launchlist/                 — saved launches, entry point
 │   ├── launchsearch/                — place search (Photon-backed)
+│   ├── planboat/                  — date + departure + return time selection, duration
+│   ├── assessment/                 — full boating-day assessment display
+│   ├── launchinfo/                 — MarineFacilityInfo display (honest-when-sparse)
 │   ├── settings/
-│   ├── about/                     — safety disclaimer + Inknaut attribution
-│   └── components/                 — shared composables (score card, hazard chip, gauges)
+│   └── about/                     — safety disclaimer + Inknaut attribution
 ├── AppDependencies.kt              — manual DI composition root (object, RideCast-style)
+├── WakeWindowViewModel.kt          — single shared ViewModel for the whole flow (see below)
 └── MainActivity.kt
 ```
+
+There is no separate `ui/components/` package yet — shared composables (metric columns, info
+rows, category badges) currently live as private functions inside the screen that uses them
+most; if a second screen needs the same one, promoting it to a shared file is a mechanical
+follow-up, not a structural change.
 
 `domain/` having zero Android/Compose/Retrofit/Room imports is enforced by convention (not a
 lint rule yet — worth adding once the package is stable) and is what keeps a future `:shared`
@@ -78,20 +91,27 @@ own `shared` module does today.
 ## Dependency injection
 
 No framework. `AppDependencies` (top-level object, mirroring RideCast's own) exposes factory
-functions (`defaultMarineForecastProvider()`, `openDatabase(context)`,
-`defaultBoatingRepository()`, etc.) called from `MainActivity` and ViewModels. As in RideCast,
-any two screens that should share a cache must be handed the *same* repository instance —
-`AppDependencies` is the one place that decides that, not each screen individually.
+functions (`observationProvider()`, `database(context)`, `boatingRepository()`,
+`savedLaunchRepository(context)`, `placeProvider()`) called from `MainActivity` and the shared
+`WakeWindowViewModel`. `nwsProviders` is held as a `by lazy` singleton specifically so its
+grid-URL/time-zone-per-coordinate cache is actually shared across every screen that needs NWS
+data, rather than silently rebuilt per call — the same "same instance or the cache is
+defeated" lesson RideCast's own `AppDependencies` documents.
 
 ## Provider interfaces (domain layer, no implementation detail leaks through)
 
+Both general and marine forecast fetches return the same `ForecastOutcome` shape (a series of
+`MarineConditions`, one per hour) — see `domain/weather/ForecastOutcome.kt` — since "fetch an
+hourly series, maybe there's no coverage, maybe the call failed" is genuinely the same shape
+for both concerns, not an accidentally-reused generic wrapper.
+
 ```kotlin
 interface GeneralWeatherProvider {
-    suspend fun hourlyForecast(location: GeoPoint, start: Instant, end: Instant): WeatherOutcome
+    suspend fun hourlyForecast(location: GeoPoint, start: Instant, end: Instant): ForecastOutcome
 }
 
 interface MarineForecastProvider {
-    suspend fun hourlyMarineForecast(location: GeoPoint, start: Instant, end: Instant): MarineForecastOutcome
+    suspend fun hourlyMarineForecast(location: GeoPoint, start: Instant, end: Instant): ForecastOutcome
 }
 
 interface MarineObservationProvider {
@@ -112,7 +132,7 @@ interface MarineAlertProvider {
 }
 
 interface MarinePlaceProvider {
-    suspend fun search(query: String, bias: GeoPoint?): List<MarinePlaceCandidate>
+    suspend fun search(query: String, bias: GeoPoint?): PlaceSearchOutcome
 }
 ```
 
@@ -178,16 +198,31 @@ needed.
 
 ## Caching
 
-A single decorator pattern reused for marine forecast, tide, and place-search repositories:
-in-memory TTL cache (location-keyed, not window-keyed) → live fetch, with stale-over-error
-fallback on a failed live fetch. The durable (Room-backed) second cache tier RideCast has is
-deferred until real usage data shows it's needed — this sprint's TTL cache is enough to avoid
-refetching on every recomposition/navigation without adding a persistence layer for something
-that goes stale within the hour anyway.
+**As actually built** (corrected from an earlier draft of this doc that described a caching
+decorator this project doesn't have): there is no repository-level TTL cache wrapping
+`DefaultBoatingRepository.buildAssessment()` yet — each call fans out to every provider fresh.
+What does exist, scoped to where it clearly matters:
+
+- `NwsProviders` caches the `/points` → `forecastGridData` URL and resolved `ZoneId` per
+  coordinate indefinitely (in-memory, no TTL) — pure geography, never goes stale, mirroring
+  RideCast's own NWS grid-cache pattern.
+- `NdbcObservationProvider` caches the parsed `latest_obs.txt` snapshot for 10 minutes — it's a
+  ~100 KB network-wide file that changes on NDBC's own reporting cadence, not something worth
+  re-fetching per screen recomposition.
+- `NdbcStationDirectory` caches the id→name lookup for 24 hours — station names essentially
+  never change.
+- `CoopsTideProvider` caches the full CO-OPS tide-station list (~3,500 stations) for the
+  process lifetime once fetched.
+
+A RideCast-style three-tier decorator (in-memory TTL → durable Room fallback → live fetch,
+stale-over-error on failure) around the whole assessment is a reasonable next addition once
+real usage shows repeated `buildAssessment()` calls for the same plan are common enough to
+matter — see "Scale and Provider Risk" in [ROADMAP.md](ROADMAP.md).
 
 ## What's deliberately not here yet
 
-WorkManager background refresh, notifications, maps, NDBC observations, the Inknaut splash's
-onboarding-check gate, and Mode B (port-to-port) route generation are all out of this sprint's
-scope — see [ROADMAP.md](ROADMAP.md). The provider interfaces above already have the shape to
-add `MarineObservationProvider`'s NDBC implementation later without touching call sites.
+WorkManager background refresh, notifications, maps, `CurrentProvider`/`MarineFacilityInfoProvider`
+implementations, the Inknaut splash's onboarding-check gate, and Mode B (port-to-port) route
+generation are all out of scope so far — see [ROADMAP.md](ROADMAP.md). NDBC observations
+(`MarineObservationProvider`) shipped in Sprint 2, exactly along the seam described above,
+without touching any call site that predates it.
