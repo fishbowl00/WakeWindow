@@ -73,15 +73,15 @@ actually represents the user's boating environment? Shipped:
    Advisory entries for one nine-hour outing) found and fixed *during* this live
    re-validation, not before it. See [ASSESSMENT_VALIDATION.md](ASSESSMENT_VALIDATION.md).
 
-## Sprint 4 — productization: launch intelligence, vessel personalization, planning UX, scale hardening (complete, with honest gaps)
+## Sprint 4 — productization: launch intelligence, vessel personalization, planning UX, scale hardening (complete, verified)
 
 Goal: move WakeWindow from "excellent technical prototype" toward something a real boat owner
-would trust on a Saturday morning. **This sprint ran in an online Claude Code environment with
-no outbound network access to any provider host or to Android's/Google's Maven repository** —
-see the sprint report for the full account. No build, test run, or live provider validation
-could be performed; every change below is implemented and reasoned through at the source level,
-not verified by a green build. That verification is the mandatory first step of whatever comes
-next. Shipped (pending that verification):
+would trust on a Saturday morning. **This sprint originally ran in an online Claude Code
+environment with no outbound network access to any provider host or to Android's/Google's
+Maven repository**, so nothing below was compiled, run, or live-validated when first written.
+**Sprint 4.5 (a local session with full SDK/network access) has since compiled, tested, and
+live-validated it — see "Sprint 4.5 — local verification and repair" below for the full
+account, including eight real bugs found and fixed.** Shipped:
 
 1. **Real FWC facility intelligence** — `FwcFacilityInfoProvider`, the first real
    `MarineFacilityInfoProvider`, wiring `TotalLanes`, `ContactPhone`, `RampType`, `AccessType`,
@@ -128,33 +128,88 @@ next. Shipped (pending that verification):
     committing to a paid vendor without that verification (or the user's sign-off on a
     cost-bearing dependency) was explicitly out of scope — see [DATA_SOURCES.md](DATA_SOURCES.md).
 
-**Not attempted, or only partially, and why:** device UX validation (no physical device/
-emulator in this environment — see the sprint report); USACE facility-data re-investigation (no
-network access to inspect further live services); a full "GOOD TODAY" Home-screen condition
-badge per saved launch (would need either durable serialization of the full assessment graph or
-a user-triggered-refresh design — descoped to the lighter "usually 7 AM · 6h" recall instead,
-which needed neither); broad accessibility/UI-polish audit beyond the screens directly touched
-this sprint.
+**Not attempted, or only partially, and why:** USACE facility-data re-investigation (no
+network access to inspect further live services at the time); a full "GOOD TODAY" Home-screen
+condition badge per saved launch (would need either durable serialization of the full
+assessment graph or a user-triggered-refresh design — descoped to the lighter "usually 7 AM ·
+6h" recall instead, which needed neither); broad accessibility/UI-polish audit beyond the
+screens directly touched this sprint. Physical-device UX validation was attempted in Sprint 4.5
+but a Razr Ultra was never connected (only an emulator was available, and the sprint brief
+explicitly says not to substitute one by accident) — still genuinely not done, see below.
+
+## Sprint 4.5 — local verification and repair (complete)
+
+Goal: actually compile, test, and live-validate everything Sprint 4 shipped unverified, fixing
+root causes rather than merely reporting them. Found and fixed eight real bugs, all covered by
+new or updated unit tests (205 → 271 → 283 tests across Sprint 4 → 4.5):
+
+1. **`VesselProfile.presets()`** — the "Small recreational boat" preset was built via
+   `default().copy(name = ...)`, which doesn't recompute the `id = name` default parameter, so
+   its `id` stayed `"Recreational boat (default)"` while its `name` changed — broke the "a
+   preset's `id` is its own `name`" invariant `markCustomized()` depends on.
+2. **`SolarCalculator`** — the day-rollover correction was missing: a west-longitude evening
+   event (sunset) routinely lands after UTC midnight, but the algorithm always anchored it to
+   the same UTC calendar day as the morning event, so Port Canaveral's computed sunset came out
+   *before* sunrise. Fixed and re-verified against Port Canaveral, Boston (summer/winter),
+   equator, and polar cases.
+3. **`FwcMapper.toFacilityInfo`** — live FWC data (re-verified 2026-08-31, ~275-record sample
+   across six Florida counties) showed ~23% of records carry the literal string `"NA"` for
+   `ContactPhone` rather than leaving it null. Now treated as absent, matching NDBC's own
+   `"MM"`-marker precedent — see [DATA_SOURCES.md](DATA_SOURCES.md).
+4. **`FwcMapper.whereClauseFor`** — FWC's own `City` field always spells "Saint"/"Fort" out in
+   full (confirmed live, no exceptions found); a user typing the far more common abbreviated
+   form ("St Petersburg", "Ft Myers") got zero FWC matches and fell straight through to
+   unranked Photon noise (live-verified: Petersburg, Alaska and Russian university results
+   ranked ahead of the actual Florida city). Query normalization fixes it for both forms.
+5. **`DurableCache.getOrFetch`** — a cache *hit's* `deserialize()` call was outside the
+   try/catch, so a corrupted cached payload threw uncaught instead of degrading to a miss.
+6. **`WakeWindowViewModel.search()`** — no try/catch around `placeProvider.search()`, and no
+   `CoroutineExceptionHandler` exists anywhere in the app — the DurableCache bug above made this
+   a real, reachable crash, not just a theoretical one. Now caught like `viewLaunchInfo()`.
+7. **`WakeWindowViewModel.setReturnTime()`** — no validation, unlike `setDepartureTime()`'s
+   existing guard; the manual Return picker could produce a return time at or before departure.
+8. **Tide/current station provenance** — `MarineConditions` carries one shared `source` field,
+   and the merge order always put a plain weather reading first, so tide/current station
+   identity never survived merging even before reaching the UI — contradicting
+   [DATA_SOURCES.md](DATA_SOURCES.md)'s explicit requirement. Fixed by adding
+   `nearestTideStation`/`nearestCurrentStation` directly to `BoatingWindowAssessment` (tide and
+   current stations are frequently *different* physical stations, so a shared field would have
+   risked mislabeling one with the other's identity) rather than patching the merge itself.
+
+Also: moved `VesselProfile.markCustomized()` from a private UI-layer function into the domain
+layer (matching `withNewId()`), made `WakeWindowViewModel.saveVesselProfile()` call it as a real
+backstop rather than trusting the caller; fixed a `RequestCoalescer` cleanup race where an
+already-cancelled caller could permanently leak its in-flight map entry (wrapped in
+`NonCancellable`, the standard kotlinx.coroutines idiom); added a `ThrowingMarineProvider` test
+for symmetry with existing general-provider throw coverage; fixed 10 `DefaultLocale` lint
+warnings in Sprint 4's own new code.
+
+**Confirmed working as designed, not bugs:** the alert-gate/vessel-tolerance interaction (an
+official marine warning cannot be neutralized by a permissive vessel profile — traced through
+`MarinePointScorer`'s severity-max gating); `FacilityAvailability`'s UNKNOWN/NOT_AVAILABLE/
+NOT_APPLICABLE distinctness in `LaunchInfoScreen`; the 150 NM tide / 50 NM current station
+cutoffs; `DefaultBoatingRepositoryTest`'s existing throwing-provider coverage for every
+provider except marine forecast (see fix 8 above's sibling test).
+
+**Known remaining gap, not fixed this sprint:** two saved custom vessel profiles can share an
+identical name with no warning — cosmetic (IDs stay distinct, no data corruption), left as a
+minor UX nicety rather than in-scope for a verification/repair sprint.
 
 ## Next sprint (highest-value follow-on)
 
-1. **Get a real build and test run.** Nothing above has been compiled or executed this sprint —
-   see the sprint report. This is the mandatory first step before any of the following.
-2. **Live provider validation** — Port Canaveral, a second Florida ramp-rich area, Clinton Lake
-   KS, and a sparse-data location, re-run against everything Sprint 4 touched (FWC facility
-   fields especially — the three newly-added field names were never re-verified live).
-3. **Physical-device / emulator UX pass** — the original Sprint 4 brief's first task (a Razr
-   Ultra device audit) never happened; do it before further UI work, not after.
-4. Wire `TripLegEstimator.routeSamples()` into a real per-location weather fetch and build a
-   minimal Mode B screen once the domain layer has been validated against a real build.
-5. Extend `DurableCache` to the weather/tide/current fan-out per the TTL table already
+1. **Physical-device UX pass** — the original Sprint 4 brief's first task (a Razr Ultra device
+   audit) still hasn't happened across two sprints now; do it before further UI work, not after.
+2. Wire `TripLegEstimator.routeSamples()` into a real per-location weather fetch and build a
+   minimal Mode B screen, now that the domain layer has been validated against a real build.
+3. Extend `DurableCache` to the weather/tide/current fan-out per the TTL table already
    documented in [CACHE_POLICY.md](CACHE_POLICY.md), with alerts getting their own careful
    staleness review first.
-6. Real-time current *observations* (PORTS-equipped stations), distinct from the
+4. Real-time current *observations* (PORTS-equipped stations), distinct from the
    predictions-only implementation shipped in Sprint 3.
-7. A genuine paid-geocoder evaluation (Geoapify/LocationIQ/Mapbox or similar) once network
-   access allows checking real current terms, plus the user's sign-off on any cost-bearing
-   dependency.
+5. A genuine paid-geocoder evaluation (Geoapify/LocationIQ/Mapbox or similar), plus the user's
+   sign-off on any cost-bearing dependency.
+6. Optional polish: warn on/prevent duplicate custom vessel-profile names (see Sprint 4.5's
+   known remaining gap above).
 
 ## Launch intelligence — deliberately not a web scraper
 
