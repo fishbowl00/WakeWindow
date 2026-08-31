@@ -20,7 +20,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
@@ -90,19 +89,9 @@ fun AboutScreen(onBack: () -> Unit) {
 private fun PublisherAttribution() {
     val isDark = LocalWakeWindowDarkTheme.current
     val lockup = if (isDark) R.drawable.inknaut_lockup_stack_dark else R.drawable.inknaut_lockup_stack_light
-    androidx.compose.foundation.layout.Row(
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Image(
-            painter = painterResource(id = lockup),
-            contentDescription = "Inknaut Labs",
-            modifier = Modifier.height(28.dp),
-        )
-        Text(
-            "An Inknaut Labs app",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 12.dp),
-        )
-    }
+    Image(
+        painter = painterResource(id = lockup),
+        contentDescription = "Inknaut Labs",
+        modifier = Modifier.height(28.dp),
+    )
 }
