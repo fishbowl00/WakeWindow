@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -36,7 +37,13 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.wakewindow.app.domain.place.SavedLaunch
+import com.wakewindow.app.domain.trip.SavedTrip
+import com.wakewindow.app.domain.trip.TripLegEstimator
+import com.wakewindow.app.domain.trip.toPlan
+import com.wakewindow.app.domain.vessel.VesselProfile
 import com.wakewindow.app.ui.WakeWindowUiState
+import java.time.Instant
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -45,6 +52,8 @@ fun LaunchListScreen(
     onAddLaunch: () -> Unit,
     onOpenLaunch: (SavedLaunch) -> Unit,
     onOpenLaunchInfo: (SavedLaunch) -> Unit,
+    onAddTrip: () -> Unit,
+    onOpenTrip: (SavedTrip) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenAbout: () -> Unit,
 ) {
@@ -64,17 +73,21 @@ fun LaunchListScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = onAddLaunch) {
-                Icon(Icons.Filled.Add, contentDescription = "Add a launch")
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                ExtendedFloatingActionButton(onClick = onAddTrip, icon = { Icon(Icons.Filled.Add, contentDescription = null) }, text = { Text("Trip") })
+                FloatingActionButton(onClick = onAddLaunch) {
+                    Icon(Icons.Filled.Add, contentDescription = "Plan a day outing")
+                }
             }
         },
     ) { innerPadding ->
-        if (!state.hasAnySavedLaunch) {
+        if (!state.hasAnySavedLaunch && state.savedTrips.isEmpty()) {
             EmptyLaunchList(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding),
                 onAddLaunch = onAddLaunch,
+                onAddTrip = onAddTrip,
             )
         } else {
             LazyColumn(
@@ -84,12 +97,21 @@ fun LaunchListScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                items(state.savedLaunches, key = { it.id }) { launch ->
-                    LaunchCard(
-                        launch = launch,
-                        onClick = { onOpenLaunch(launch) },
-                        onInfoClick = { onOpenLaunchInfo(launch) },
-                    )
+                if (state.savedTrips.isNotEmpty()) {
+                    item { SectionHeader("Saved trips") }
+                    items(state.savedTrips, key = { "trip:${it.id}" }) { trip ->
+                        TripCard(trip = trip, onClick = { onOpenTrip(trip) })
+                    }
+                }
+                if (state.savedLaunches.isNotEmpty()) {
+                    if (state.savedTrips.isNotEmpty()) item { SectionHeader("Saved launches") }
+                    items(state.savedLaunches, key = { "launch:${it.id}" }) { launch ->
+                        LaunchCard(
+                            launch = launch,
+                            onClick = { onOpenLaunch(launch) },
+                            onInfoClick = { onOpenLaunchInfo(launch) },
+                        )
+                    }
                 }
             }
         }
@@ -97,7 +119,17 @@ fun LaunchListScreen(
 }
 
 @Composable
-private fun EmptyLaunchList(modifier: Modifier = Modifier, onAddLaunch: () -> Unit) {
+private fun SectionHeader(title: String) {
+    Text(
+        title.uppercase(Locale.getDefault()),
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
+    )
+}
+
+@Composable
+private fun EmptyLaunchList(modifier: Modifier = Modifier, onAddLaunch: () -> Unit, onAddTrip: () -> Unit) {
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -117,7 +149,7 @@ private fun EmptyLaunchList(modifier: Modifier = Modifier, onAddLaunch: () -> Un
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                "Search for a boat ramp, marina, or harbor to get your first boating-day assessment.",
+                "Search for a boat ramp, marina, or harbor to get your first boating-day assessment - or plan a multi-point trip.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -136,6 +168,25 @@ private fun EmptyLaunchList(modifier: Modifier = Modifier, onAddLaunch: () -> Un
                     Text(
                         "Search launches",
                         color = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.padding(start = 8.dp),
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Surface(
+                onClick = onAddTrip,
+                shape = MaterialTheme.shapes.large,
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                modifier = Modifier.semantics { contentDescription = "Plan a trip" },
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Filled.Add, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
+                    Text(
+                        "Plan a trip",
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
                         modifier = Modifier.padding(start = 8.dp),
                     )
                 }
@@ -197,4 +248,47 @@ private fun lastPlanSummary(launch: SavedLaunch): String? {
     val durationHours = minutes / 60
     val durationLabel = if (minutes % 60 == 0L) "${durationHours}h" else "${durationHours}h ${minutes % 60}m"
     return "Usually $hour12 $meridiem · $durationLabel"
+}
+
+/** The Mode B counterpart to [LaunchCard] - see docs/TRIP_PLANNING.md "Saved trips" and the
+ * sprint brief's Phase 15 example ("Canaveral -> Sebastian / Last used Aug 31"). Never runs a
+ * full multi-provider trip assessment just because Home rendered a card - see
+ * [com.wakewindow.app.ui.WakeWindowViewModel.selectSavedTrip], which only builds a live plan
+ * once the user actually opens this trip. */
+@Composable
+private fun TripCard(trip: SavedTrip, onClick: () -> Unit) {
+    Card(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Filled.Add, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
+            Column(modifier = Modifier.padding(start = 16.dp).weight(1f)) {
+                Text(trip.name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                Text(
+                    "${trip.departure.name} → ${trip.destination.name}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "${String.format(Locale.US, "%.0f", TripLegEstimator.totalPlanningDistanceNm(trip.toPlan(VesselProfile.default(), Instant.now())))} NM · ${lastTripSummary(trip)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                )
+            }
+        }
+    }
+}
+
+private fun lastTripSummary(trip: SavedTrip): String {
+    val hour = trip.lastDepartureHourOfDay
+    if (hour == null) return "Not yet run"
+    val hour12 = when {
+        hour == 0 -> 12
+        hour > 12 -> hour - 12
+        else -> hour
+    }
+    val meridiem = if (hour < 12) "AM" else "PM"
+    return "Usually $hour12 $meridiem"
 }

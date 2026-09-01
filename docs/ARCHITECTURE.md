@@ -52,7 +52,11 @@ com.wakewindow.app
 │   ├── vessel/                 — VesselProfile, VesselType, presets, VesselProfileRepository
 │   ├── route/                  — RouteSample, RouteSampleRole, BoatingPlan, BoatingRepository,
 │   │                              QuickPlanKind/QuickPlanPresets
-│   ├── trip/                   — MarineTripPlan, PlanningWaypoint, TripLeg, TripLegEstimator (Mode B, domain-only - see TRIP_PLANNING.md)
+│   ├── trip/                   — MarineTripPlan, PlanningWaypoint, TripLeg, TripLegEstimator,
+│   │                              TripPlanLimits, WeatherSampleGenerator, TripAssessment/
+│   │                              TripPointAssessment/TripLegAssessment, TripAssessmentBuilder,
+│   │                              TripBoatingRepository, SavedTrip(Repository) (Mode B - see
+│   │                              TRIP_PLANNING.md and TRIP_ASSESSMENT.md)
 │   ├── sun/                    — SolarCalculator (sunrise/sunset/civil twilight - see PLANNING.md)
 │   ├── consensus/               — multi-provider merge for MarineConditions
 │   ├── scoring/                 — BoatingCategory, Hazard, PointAssessment,
@@ -71,13 +75,17 @@ com.wakewindow.app
 │   │   └── photon/               — keyless place search (fallback)
 │   ├── place/                    — CompositeMarinePlaceProvider (fan-out + rank + dedup across sources),
 │   │                                CachedMarinePlaceProvider (durable cache + coalescing decorator)
-│   ├── cache/                     — DurableCache, CacheStore, RoomCacheStore, RequestCoalescer - see CACHE_POLICY.md
-│   ├── local/                    — Room: SavedLaunchEntity, VesselProfileEntity, CacheEntryEntity;
-│   │                                SharedPreferences: VesselPreferenceStore
-│   ├── mapper/                    — DTO → domain, one file per provider (+ VesselProfileMapper)
+│   ├── cache/                     — DurableCache, CacheStore, RoomCacheStore, RequestCoalescer,
+│   │                                Cached{GeneralWeather,MarineForecast,MarineAlert,Tide,Current}Provider
+│   │                                (durable-cache + coalescing decorators, Sprint 5) - see CACHE_POLICY.md
+│   ├── local/                    — Room: SavedLaunchEntity, VesselProfileEntity, CacheEntryEntity,
+│   │                                SavedTripEntity (Sprint 5); SharedPreferences: VesselPreferenceStore
+│   ├── mapper/                    — DTO → domain, one file per provider (+ VesselProfileMapper, SavedTripMapper)
 │   └── repository/               — DefaultBoatingRepository (provider fan-out + consensus + station-local
-│                                    forecast/observation comparison), RoomSavedLaunchRepository,
-│                                    RoomVesselProfileRepository
+│                                    forecast/observation comparison), DefaultTripBoatingRepository
+│                                    (Mode B per-point timed fetch, Sprint 5 - see TRIP_ASSESSMENT.md),
+│                                    RoomSavedLaunchRepository, RoomVesselProfileRepository,
+│                                    RoomSavedTripRepository
 ├── ui/
 │   ├── theme/                    — WakeWindowTheme, AppearanceMode resolution, CategoryColors
 │   ├── splash/                   — InknautSplashScreen
@@ -88,6 +96,9 @@ com.wakewindow.app
 │   ├── assessment/                 — full boating-day assessment display, tide/current timeline
 │   ├── launchinfo/                 — MarineFacilityInfo display (Access/Facilities/Contact/Location/Source)
 │   ├── vessel/                    — VesselProfileScreen (custom vessel profile editor)
+│   ├── trip/                      — TripDraft, TripWaypointTarget (Mode B in-progress-plan UI state, Sprint 5)
+│   ├── tripplan/                   — TripPlanScreen (From/To/departure/vessel/cruise speed/waypoints editor)
+│   ├── tripresult/                 — TripResultScreen (overall category + chronological timeline, Sprint 5)
 │   ├── settings/
 │   └── about/                     — safety disclaimer + Inknaut attribution
 ├── AppDependencies.kt              — manual DI composition root (object, RideCast-style)
@@ -108,12 +119,18 @@ own `shared` module does today.
 ## Dependency injection
 
 No framework. `AppDependencies` (top-level object, mirroring RideCast's own) exposes factory
-functions (`observationProvider()`, `database(context)`, `boatingRepository()`,
-`savedLaunchRepository(context)`, `placeProvider()`) called from `MainActivity` and the shared
-`WakeWindowViewModel`. `nwsProviders` is held as a `by lazy` singleton specifically so its
-grid-URL/time-zone-per-coordinate cache is actually shared across every screen that needs NWS
-data, rather than silently rebuilt per call — the same "same instance or the cache is
-defeated" lesson RideCast's own `AppDependencies` documents.
+functions (`observationProvider()`, `database(context)`, `boatingRepository(context)`,
+`tripBoatingRepository(context)`, `savedLaunchRepository(context)`, `savedTripRepository(context)`,
+`placeProvider()`) called from `MainActivity` and the shared `WakeWindowViewModel`.
+`nwsProviders` is held as a `by lazy` singleton specifically so its grid-URL/time-zone-per-
+coordinate cache is actually shared across every screen that needs NWS data, rather than
+silently rebuilt per call — the same "same instance or the cache is defeated" lesson RideCast's
+own `AppDependencies` documents. `coopsTideProvider`/`coopsCurrentProvider` are `by lazy`
+singletons for the identical reason (Sprint 5). `boatingRepository(context)` and
+`tripBoatingRepository(context)` share the exact same cached provider instances (built by
+private `cachedGeneralProviders`/`cachedMarineProviders`/`cachedAlertProvider`/
+`cachedTideProvider`/`cachedCurrentProvider` helpers) so a Mode A plan and a Mode B trip through
+the same launch benefit from the same durable cache - see CACHE_POLICY.md.
 
 ## Provider interfaces (domain layer, no implementation detail leaks through)
 

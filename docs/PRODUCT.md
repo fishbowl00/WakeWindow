@@ -48,15 +48,22 @@ harbor, dock, yacht club, or other saved point), a **planned departure time**, a
 **planned return time**. WakeWindow evaluates the *entire* window — departure, underway, and
 return — and never lets several good hours average away a dangerous return.
 
-### Mode B — Port to Port / Trip Plan (architected now, built later)
+### Mode B — Port to Port / Trip Plan (real as of Sprint 5)
 
-Departure port, destination port, departure time, and optionally speed/duration/waypoints.
-WakeWindow explicitly does **not** pretend to generate real marine routes by reusing
-road-routing logic (a straight line between two ports routinely crosses land). Until real
-marine routing/charting data is integrated, this mode is limited to user-defined waypoints or
-an explicitly-labeled non-navigational planning corridor. The weather-sampling architecture
-(`RouteSample`, role-based timing) is shared with Mode A and built to support N points along a
-route from day one, so Mode B is additive, not a rewrite.
+Departure port, destination port, departure time, cruise speed, and any number of manual
+planning waypoints. WakeWindow explicitly does **not** pretend to generate real marine routes
+by reusing road-routing logic (a straight line between two ports routinely crosses land) - see
+[TRIP_PLANNING.md](TRIP_PLANNING.md) "Non-navigation language" for the exact vocabulary this
+enforces everywhere (no "route", "navigate", "safe course" anywhere in Mode B's UI or domain
+model). What's real as of Sprint 5: a full trip editor and result screen, timed per-point
+weather (each planning point - and each generated intermediate weather sample - is evaluated at
+its own expected arrival time, not a shared departure-hour snapshot), worst-case trip-level
+gating (one hazardous segment determines the overall category, never averaged away by calm
+segments on either side), time/location-aware tide/current/observation relevance, and local
+saved-trip persistence. See [TRIP_ASSESSMENT.md](TRIP_ASSESSMENT.md) for the full assessment
+pipeline and its documented limitations (no cross-timezone per-point display yet, no
+alternative-departure-window scan yet). The weather-sampling architecture (`RouteSample`,
+role-based timing) is shared with Mode A, so Mode B was additive, not a rewrite.
 
 ## Who this is for, and for what kind of water
 

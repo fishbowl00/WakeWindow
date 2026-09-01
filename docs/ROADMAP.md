@@ -195,20 +195,100 @@ provider except marine forecast (see fix 8 above's sibling test).
 identical name with no warning — cosmetic (IDs stay distinct, no data corruption), left as a
 minor UX nicety rather than in-scope for a verification/repair sprint.
 
+## Sprint 5 — real trip planning (Mode B), timed waypoint weather, cache expansion (complete)
+
+Goal: turn Mode B from a domain-only placeholder into a real, useful, tested planning feature -
+exactly the "next sprint" items 2 and 3 above - while never touching Sprint 4.5's verified Mode
+A baseline. Start commit `5ffae18`. Shipped (see [TRIP_PLANNING.md](TRIP_PLANNING.md) and
+[TRIP_ASSESSMENT.md](TRIP_ASSESSMENT.md) for the full account):
+
+1. **Real per-point timed weather** (`DefaultTripBoatingRepository`) — every trip point
+   (departure, generated weather samples, user waypoints, destination) is fetched and scored at
+   its own location and own expected arrival time, never a shared departure-hour snapshot. Live-
+   validated against real NWS/CO-OPS/NDBC data for a short coastal trip, a longer three-point
+   coastal trip, and a real non-tidal inland lake (see "Live validation" below).
+2. **Worst-case trip-level gating** (`TripAssessmentBuilder`, a new pure combiner - deliberately
+   not a reuse of `MarineScoreEngine.assess()`, whose return-weighted scoring doesn't generalize
+   to a one-way multi-leg trip, see TRIP_ASSESSMENT.md) — one hazardous segment always determines
+   the overall category, never averaged away by calm segments on either side. Live-confirmed: a
+   real trip with an EXCELLENT departure, a CAUTION waypoint, and an EXCELLENT destination
+   correctly resolved to overall CAUTION.
+3. **Deterministic intermediate weather sampling** (`WeatherSampleGenerator`) on long legs, always
+   carrying `RouteSampleRole.WEATHER_SAMPLE` and kept UI-distinct from a user-chosen planning
+   waypoint throughout — never presented as a recommended stop.
+4. **Time- and location-aware observation/tide/current relevance** — a buoy observation is only
+   fetched for a point within a 3-hour near-term window of "now" (an observation always
+   describes *right now*, never a future arrival); each point resolves its own nearest tide/
+   current station independently rather than reusing one shared station.
+5. **Trip complexity limits and honest forecast-horizon behavior** (`TripPlanLimits`) — documented
+   ceilings (10 waypoints, 3 weather samples/leg, 7-day forecast horizon, 14-day max trip
+   duration), never a silent failure or a fabricated forecast beyond what a provider can
+   actually support.
+6. **A real trip editor and result screen** (`ui/tripplan/TripPlanScreen`, `ui/tripresult/TripResultScreen`),
+   a distinct "Trip" entry point alongside "Day outing" on Home, and a "Saved trips" section
+   mirroring "Saved launches" — reusing the existing place-search screen for waypoint picking
+   rather than building a second one.
+7. **Local saved-trip persistence** (`SavedTrip`/`SavedTripRepository`/`SavedTripEntity`, Room
+   schema version 2 → 3, no migration written — same pre-release/no-real-installs rationale as
+   the 1 → 2 bump) — a trip is remembered automatically after a successful assessment, exactly
+   like Mode A's "usually 7 AM" launch recall.
+8. **Durable cache expansion** to NWS/Open-Meteo general and marine forecast (45 min), NWS
+   alerts (7 min, after a specific safety review — see CACHE_POLICY.md "Safety-critical alert
+   caching"), and CO-OPS tide/current station metadata (7 days) and predictions (6 hours) — see
+   [CACHE_POLICY.md](CACHE_POLICY.md) for the full TTL table and rationale, and for the specific,
+   newly-found reason NDBC observations were deliberately left un-cached this sprint (a cached
+   "age minutes" field would silently go stale between fetch and a later cache hit).
+9. **Request coalescing extended to trip mode** — every newly-cached provider also
+   request-coalesces, so a multi-waypoint trip's concurrent per-point fan-out never issues
+   duplicate simultaneous network calls for the same NWS grid cell or CO-OPS station.
+10. Non-navigation language audited throughout Mode B's new UI and domain code — "planning
+    distance," "planning waypoint," "weather sample" (never "waypoint" for a generated point),
+    the sprint brief's own disclaimer text shown directly in the trip editor.
+
+**Live validation** (real network, this session; not part of the committed test suite - kept
+as temporary scratch files, deleted after use, matching this codebase's "hand-written fakes
+only" testing philosophy for the *committed* suite):
+
+- Short real coastal trip (Port Canaveral → Sebastian Inlet): resolved a real NDBC buoy (41113),
+  a real tide station (Trident Pier), correct HARBOR/NEARSHORE environment classification per
+  point, and correctly time-gated observation relevance.
+- Longer real three-point coastal trip (Port Canaveral → Sebastian Inlet → Fort Pierce Inlet,
+  ~90 NM total): correctly generated one weather sample per ~25-35 NM leg, resolved three
+  distinct real tide stations and one real current station shared only where it was genuinely
+  nearest, and correctly worst-cased overall to CAUTION from a single CAUTION waypoint between
+  two EXCELLENT endpoints.
+- Real non-tidal inland lake (Clinton Lake, KS): confirmed zero fabricated tide/current data
+  (`tideStation=null`, `currentStation=null`, `tideHeightFt=null`, `currentSpeedKts=null`) for a
+  water body that genuinely has none — INLAND environment correctly classified both ends.
+
+**Test count: 283 → 316** (33 new tests: `MarineTripPlanTest` limit/id/duration additions,
+`WeatherSampleGeneratorTest`, `TripAssessmentBuilderTest`, `DefaultTripBoatingRepositoryTest`,
+`CachedProvidersTest`, `SavedTripMapperTest`).
+
+**Not attempted, or deferred, and why:** the alternative-departure-window scan (Phase 13, an
+explicit stretch goal in the sprint brief); per-point timezone resolution/display for a
+cross-timezone trip (every point renders in the departure zone — a real, documented limitation,
+see TRIP_ASSESSMENT.md); physical-device/emulator validation (no Android device or emulator was
+available in this session, only real network access — the physical-device UX pass from Sprint 4
+still hasn't happened across three sprints now and should be prioritized before further UI
+work); NDBC observation durable caching (see above).
+
 ## Next sprint (highest-value follow-on)
 
-1. **Physical-device UX pass** — the original Sprint 4 brief's first task (a Razr Ultra device
-   audit) still hasn't happened across two sprints now; do it before further UI work, not after.
-2. Wire `TripLegEstimator.routeSamples()` into a real per-location weather fetch and build a
-   minimal Mode B screen, now that the domain layer has been validated against a real build.
-3. Extend `DurableCache` to the weather/tide/current fan-out per the TTL table already
-   documented in [CACHE_POLICY.md](CACHE_POLICY.md), with alerts getting their own careful
-   staleness review first.
-4. Real-time current *observations* (PORTS-equipped stations), distinct from the
+1. **Physical-device UX pass** — still hasn't happened across three sprints now (Sprint 4,
+   Sprint 4.5, Sprint 5 all lacked a real Android device/emulator); do it before further UI
+   work, not after. Sprint 5's new trip editor/result screens have compiled and passed unit
+   tests but have never been visually verified on a real screen.
+2. The alternative-departure-window scan (Sprint 5 Phase 13 stretch goal) — the domain model is
+   ready; see TRIP_ASSESSMENT.md "Not attempted this sprint."
+3. Per-point timezone resolution/display for trips that cross time zones.
+4. NDBC observation durable caching, once age-at-read-time (rather than age-at-fetch-time) is
+   worked out — see CACHE_POLICY.md.
+5. Real-time current *observations* (PORTS-equipped stations), distinct from the
    predictions-only implementation shipped in Sprint 3.
-5. A genuine paid-geocoder evaluation (Geoapify/LocationIQ/Mapbox or similar), plus the user's
+6. A genuine paid-geocoder evaluation (Geoapify/LocationIQ/Mapbox or similar), plus the user's
    sign-off on any cost-bearing dependency.
-6. Optional polish: warn on/prevent duplicate custom vessel-profile names (see Sprint 4.5's
+7. Optional polish: warn on/prevent duplicate custom vessel-profile names (see Sprint 4.5's
    known remaining gap above).
 
 ## Launch intelligence — deliberately not a web scraper
@@ -247,8 +327,26 @@ Sprint 3 makes on the order of 10-12 outbound calls per assessment (NWS grid, NW
 Open-Meteo general, Open-Meteo marine, CO-OPS tide station list + predictions, CO-OPS current
 station list + predictions, NDBC snapshot, NDBC station names, plus a **second**, narrower
 general+marine fetch at the observation station's own coordinates for the forecast-vs-
-observation comparison when a station is available) with **no caching above the
-individual-provider level** — see "Caching" in [ARCHITECTURE.md](ARCHITECTURE.md).
+observation comparison when a station is available). As of Sprint 5 the general/marine/alert/
+tide/current legs of that fan-out are durably cached and request-coalesced — see
+[CACHE_POLICY.md](CACHE_POLICY.md) — so a repeat or simultaneous-duplicate call for the same
+location/window is now cheap; a genuinely new location/window is not, and still pays the full
+per-call cost.
+
+**Trip mode's per-point fan-out (Sprint 5):** `DefaultTripBoatingRepository` repeats
+Mode A's *shape* of fetch (general, marine, alerts, tide station+events, current
+station+events, point type, sometimes an observation) independently **per trip point** — roughly
+7-8 outbound calls per point with a single general/marine provider configured (more with
+Open-Meteo also enabled), plus a further ~4 for any point close enough to "now" to trigger an
+observation comparison. This scales linearly with point count for genuinely distinct locations:
+an untried 2-point trip is roughly comparable to one Mode A assessment; a longer multi-waypoint
+trip with several generated weather samples (see TRIP_ASSESSMENT.md) is proportionally more.
+Caching/coalescing (Sprint 5) remove the *duplicate* cost when multiple points round to the same
+NWS grid cell or CO-OPS station (a real, common case for waypoints a few miles apart) but do not
+reduce the base fan-out for points that are genuinely far apart. No formal before/after call-count
+measurement was taken this sprint (no request-counting harness exists yet) — this is a structural
+estimate from the code's own fetch pattern, not a benchmark; building a real counting harness is
+worthwhile follow-up before trip mode sees heavier use.
 
 | Users (concurrent-ish daily actives) | Primary risk | Notes |
 |---|---|---|
@@ -276,9 +374,6 @@ record."
 These are structurally supported (interfaces, domain seams, nullable models) so they are
 additive later rather than requiring rework, but are explicitly out of scope so far:
 
-- Port-to-port / trip planning (Mode B) UI, and weather fetched per-waypoint - the domain
-  model itself (`MarineTripPlan`, manual waypoints, planning-distance/ETA estimation) shipped
-  in Sprint 4; see [TRIP_PLANNING.md](TRIP_PLANNING.md) for exactly what's still missing.
 - Route-aware marine weather along a real charted course.
 - Tidal-current effects on a planned route.
 - Multi-day boating outlook (beyond a single day's hourly assessment).

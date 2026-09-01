@@ -38,32 +38,60 @@ route length.
   know the real shape of — matching the sprint brief's "meaningful sample points... not
   continuous 500-point sampling."
 
-## What's built this sprint
+## What's built (Sprint 4 domain foundation + Sprint 5 real assessment/UI/persistence)
 
-The domain model above: `MarineTripPlan`, `PlanningWaypoint`, `TripLeg`,
-`TripLegEstimator.estimateLegs`/`routeSamples`/`totalPlanningDistanceNm`. Fully unit-tested
-(`MarineTripPlanTest`) — deterministic, network-free.
+**Sprint 4 (domain only):** `MarineTripPlan`, `PlanningWaypoint`, `TripLeg`,
+`TripLegEstimator.estimateLegs`/`routeSamples`/`totalPlanningDistanceNm`.
 
-## What's explicitly NOT built this sprint
+**Sprint 5 adds a real, working Mode B end to end** — see [TRIP_ASSESSMENT.md](TRIP_ASSESSMENT.md)
+for the full assessment pipeline:
 
-- **No UI.** Per the sprint brief ("only build a polished trip screen if the underlying
-  domain/use case is solid... otherwise create enough UI to validate the flow"), and given this
-  session had no way to compile or run the app to validate a new screen, no Mode B screen ships
-  this sprint. The domain layer is ready for one.
-- **No per-waypoint weather fetch.** `TripLegEstimator.routeSamples()` produces the right
-  *shape* of sample list, but `DefaultBoatingRepository.buildAssessment()` still only ever
-  fetches weather for one location (Mode A's launch) — see its own class doc:
-  *"Mode A always samples the same launch location... A real multi-location trip (Mode B) would
-  extend this to fetch per distinct sample location."* Wiring a trip plan's samples through to
-  a real per-location fetch (and reusing/adapting `MarineScoreEngine.assess()`, which already
-  accepts an arbitrary `List<RouteSample>`) is real, scoped follow-up work, not attempted here.
-- **No tidal-current-on-route effects, no multi-day outlook.** Both remain out of scope per
-  [ROADMAP.md](ROADMAP.md)'s existing "architected now, intentionally not built" list.
+- Timed, per-point weather/tide/current/observation fetching (`DefaultTripBoatingRepository`) —
+  every planning point, and every generated intermediate weather sample, is evaluated at its own
+  expected arrival time and location, never a shared departure-hour snapshot.
+- Worst-case trip-level gating (`TripAssessmentBuilder`) — one hazardous segment determines the
+  overall trip category, never averaged away by calm segments on either side.
+- Deterministic intermediate weather sampling on long legs (`WeatherSampleGenerator`), always
+  role `RouteSampleRole.WEATHER_SAMPLE`, never presented as a planning waypoint.
+- A real trip editor (`ui/tripplan/TripPlanScreen`) and hierarchical result screen
+  (`ui/tripresult/TripResultScreen`), reachable from Home via a "Trip" entry point distinct from
+  "Day outing," with waypoint search reusing the existing place-search screen.
+- Local persistence (`SavedTrip`/`SavedTripRepository`/Room), with a "Saved trips" section on
+  Home mirroring "Saved launches" (see the sprint brief's Phase 15) — a trip is remembered
+  automatically after a successful assessment, exactly like a Mode A launch's "usually 7 AM"
+  recall, never a full multi-provider re-assessment fired just because Home rendered.
+- Documented, enforced trip complexity limits (`TripPlanLimits`) and honest forecast-horizon
+  behavior — see TRIP_ASSESSMENT.md.
+- Durable caching extended to the weather/alert/tide/current fan-out, shared between Mode A and
+  Mode B — see [CACHE_POLICY.md](CACHE_POLICY.md).
+
+## What's explicitly NOT built yet
+
+- **Alternative departure-window scan** (sprint brief Phase 13, an explicit stretch goal) — "leaving
+  90 minutes earlier avoids the highest storm risk" is not built; see TRIP_ASSESSMENT.md.
+- **Per-point timezone resolution/display** — every point renders in the departure zone; see
+  TRIP_ASSESSMENT.md's own honest limitation writeup.
+- **Route-aware marine weather along a real charted course, tidal-current-on-route effects,
+  multi-day outlook beyond a single trip's own timeline.** All remain out of scope per
+  [ROADMAP.md](ROADMAP.md)'s "architected now, intentionally not built" list.
+
+## Weather samples vs. planning waypoints
+
+Sprint 5 introduces a second kind of point: a generated intermediate weather-evaluation sample
+on a long leg (see [TRIP_ASSESSMENT.md](TRIP_ASSESSMENT.md) "Intermediate weather sampling"),
+carrying `RouteSampleRole.WEATHER_SAMPLE` and `TripPointKind.WEATHER_SAMPLE`. This is never the
+same thing as a `PlanningWaypoint`/`RouteSampleRole.WAYPOINT`: a weather sample was never chosen
+by the user, has no name, and must never be presented as a recommended or navigable stop —
+`ui/tripresult/TripResultScreen.kt` labels it plainly "Weather sample" in the timeline, distinct
+from a named planning waypoint or "Departure"/"Destination."
 
 ## Non-navigation language, end to end
 
-Anywhere this reaches a UI in a future sprint, it must keep using: "planning distance" (not
-"route distance" or "navigable distance"), "planning waypoint" (not "navigation waypoint"),
-"estimated arrival based on your cruise speed" (not "ETA" presented as authoritative), and it
-must never render a line on a map between waypoints implying a charted, safe course — WakeWindow
-has no map screen and no charting data to justify one.
+WakeWindow's Mode B UI and domain model consistently use: "planning distance" (not "route
+distance" or "navigable distance"), "planning waypoint" (not "navigation waypoint"), "weather
+sample" (not "waypoint" or "stop," for a generated point), "estimated arrival based on your
+cruise speed" (not "ETA" presented as authoritative), and never render a line on a map between
+waypoints implying a charted, safe course — WakeWindow has no map screen and no charting data to
+justify one. `ui/tripplan/TripPlanScreen.kt` shows the sprint brief's own disclaimer text
+directly in the editor: *"WakeWindow estimates conditions between user-selected planning points.
+It does not calculate a navigable marine route."*

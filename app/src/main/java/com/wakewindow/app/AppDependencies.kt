@@ -1,6 +1,11 @@
 package com.wakewindow.app
 
 import android.content.Context
+import com.wakewindow.app.data.cache.CachedCurrentProvider
+import com.wakewindow.app.data.cache.CachedGeneralWeatherProvider
+import com.wakewindow.app.data.cache.CachedMarineAlertProvider
+import com.wakewindow.app.data.cache.CachedMarineForecastProvider
+import com.wakewindow.app.data.cache.CachedTideProvider
 import com.wakewindow.app.data.cache.DurableCache
 import com.wakewindow.app.data.cache.RoomCacheStore
 import com.wakewindow.app.data.local.VesselPreferenceStore
@@ -18,14 +23,23 @@ import com.wakewindow.app.data.remote.openmeteo.OpenMeteoMarineProvider
 import com.wakewindow.app.data.remote.photon.PhotonPlaceProvider
 import com.wakewindow.app.data.remote.usace.UsaceRecreationProvider
 import com.wakewindow.app.data.repository.DefaultBoatingRepository
+import com.wakewindow.app.data.repository.DefaultTripBoatingRepository
 import com.wakewindow.app.data.repository.RoomSavedLaunchRepository
+import com.wakewindow.app.data.repository.RoomSavedTripRepository
 import com.wakewindow.app.data.repository.RoomVesselProfileRepository
+import com.wakewindow.app.domain.alert.MarineAlertProvider
+import com.wakewindow.app.domain.marine.MarineForecastProvider
 import com.wakewindow.app.domain.observation.MarineObservationProvider
 import com.wakewindow.app.domain.place.MarineFacilityInfoProvider
 import com.wakewindow.app.domain.place.MarinePlaceProvider
 import com.wakewindow.app.domain.place.SavedLaunchRepository
 import com.wakewindow.app.domain.route.BoatingRepository
+import com.wakewindow.app.domain.tide.CurrentProvider
+import com.wakewindow.app.domain.tide.TideProvider
+import com.wakewindow.app.domain.trip.SavedTripRepository
+import com.wakewindow.app.domain.trip.TripBoatingRepository
 import com.wakewindow.app.domain.vessel.VesselProfileRepository
+import com.wakewindow.app.domain.weather.GeneralWeatherProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -99,6 +113,12 @@ object AppDependencies {
     fun facilityInfoProvider(context: Context): MarineFacilityInfoProvider =
         FwcFacilityInfoProvider(cache = durableCache(context))
 
+    // Shared for the same reason as nwsProviders above - CoopsTideProvider/CoopsCurrentProvider
+    // each hold their own process-lifetime in-memory station-list cache, which a fresh instance
+    // per call would silently defeat. See docs/CACHE_POLICY.md "CO-OPS station metadata."
+    private val coopsTideProvider: CoopsTideProvider by lazy { CoopsTideProvider() }
+    private val coopsCurrentProvider: CoopsCurrentProvider by lazy { CoopsCurrentProvider() }
+
     /**
      * NWS is the primary, production-safe source for both general and marine forecast data
      * (see docs/DATA_SOURCES.md). Open-Meteo is included as a second concurrent source purely
@@ -107,22 +127,63 @@ object AppDependencies {
      * observations are public/open government data with no such constraint - see
      * docs/DATA_SOURCES.md "Provider licensing summary."
      *
-     * [includeOpenMeteo] defaults to true (today's development configuration) but WakeWindow
+     * Every provider except NDBC observations is wrapped in [DurableCache] - see
+     * docs/CACHE_POLICY.md for the full TTL table and the reasoning behind leaving NDBC
+     * observations on their existing narrower in-memory cache instead. Shared by both
+     * [boatingRepository] (Mode A) and [tripBoatingRepository] (Mode B), so a cache warmed by
+     * one benefits the other - a day-outing plan and a trip plan through the same launch hit
+     * the same cached grid/alert/tide data instead of each fetching independently.
+     */
+    private fun cachedGeneralProviders(context: Context, includeOpenMeteo: Boolean): List<GeneralWeatherProvider> = listOfNotNull(
+        CachedGeneralWeatherProvider(nwsProviders, durableCache(context), applicationScope),
+        OpenMeteoGeneralProvider().takeIf { includeOpenMeteo }?.let { CachedGeneralWeatherProvider(it, durableCache(context), applicationScope) },
+    )
+
+    private fun cachedMarineProviders(context: Context, includeOpenMeteo: Boolean): List<MarineForecastProvider> = listOfNotNull(
+        CachedMarineForecastProvider(nwsProviders, durableCache(context), applicationScope),
+        OpenMeteoMarineProvider().takeIf { includeOpenMeteo }?.let { CachedMarineForecastProvider(it, durableCache(context), applicationScope) },
+    )
+
+    private fun cachedAlertProvider(context: Context): MarineAlertProvider =
+        CachedMarineAlertProvider(nwsProviders, durableCache(context), applicationScope)
+
+    private fun cachedTideProvider(context: Context): TideProvider =
+        CachedTideProvider(coopsTideProvider, durableCache(context), applicationScope)
+
+    private fun cachedCurrentProvider(context: Context): CurrentProvider =
+        CachedCurrentProvider(coopsCurrentProvider, durableCache(context), applicationScope)
+
+    /** [includeOpenMeteo] defaults to true (today's development configuration) but WakeWindow
      * must remain fully functional with it false - see docs/DATA_SOURCES.md "Remove structural
      * Open-Meteo dependency." `DefaultBoatingRepositoryTest` exercises the resulting
-     * single-general-provider/single-marine-provider shape directly (every existing fake-based
-     * test there already runs exactly one general and one marine provider, which is
-     * structurally identical to this flag set to false); this parameter is the seam that lets
-     * a real build actually opt into that configuration, not merely a config value nothing
-     * reads.
-     */
-    fun boatingRepository(includeOpenMeteo: Boolean = true): BoatingRepository = DefaultBoatingRepository(
-        generalProviders = listOfNotNull(nwsProviders, OpenMeteoGeneralProvider().takeIf { includeOpenMeteo }),
-        marineForecastProviders = listOfNotNull(nwsProviders, OpenMeteoMarineProvider().takeIf { includeOpenMeteo }),
-        alertProvider = nwsProviders,
-        tideProvider = CoopsTideProvider(),
+     * single-general-provider/single-marine-provider shape directly against hand-written fakes
+     * (never through this cached wiring, which is exercised by the `Cached*ProviderTest` suite
+     * instead) - this parameter is the seam that lets a real build actually opt into that
+     * configuration. */
+    fun boatingRepository(context: Context, includeOpenMeteo: Boolean = true): BoatingRepository = DefaultBoatingRepository(
+        generalProviders = cachedGeneralProviders(context, includeOpenMeteo),
+        marineForecastProviders = cachedMarineProviders(context, includeOpenMeteo),
+        alertProvider = cachedAlertProvider(context),
+        tideProvider = cachedTideProvider(context),
         observationProvider = observationProvider(),
         pointTypeProvider = nwsProviders,
-        currentProvider = CoopsCurrentProvider(),
+        currentProvider = cachedCurrentProvider(context),
     )
+
+    /** The Mode B (trip) counterpart to [boatingRepository] - see
+     * [com.wakewindow.app.data.repository.DefaultTripBoatingRepository]. Reuses the exact same
+     * cached provider instances as [boatingRepository], not a second independent set - see
+     * this object's own class doc on why shared instances matter for caching. */
+    fun tripBoatingRepository(context: Context, includeOpenMeteo: Boolean = true): TripBoatingRepository = DefaultTripBoatingRepository(
+        generalProviders = cachedGeneralProviders(context, includeOpenMeteo),
+        marineForecastProviders = cachedMarineProviders(context, includeOpenMeteo),
+        alertProvider = cachedAlertProvider(context),
+        tideProvider = cachedTideProvider(context),
+        observationProvider = observationProvider(),
+        pointTypeProvider = nwsProviders,
+        currentProvider = cachedCurrentProvider(context),
+    )
+
+    fun savedTripRepository(context: Context): SavedTripRepository =
+        RoomSavedTripRepository(database(context).savedTripDao())
 }

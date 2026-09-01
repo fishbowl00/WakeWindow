@@ -4,7 +4,11 @@ import com.wakewindow.app.domain.place.MarinePlaceCandidate
 import com.wakewindow.app.domain.place.SavedLaunch
 import com.wakewindow.app.domain.scoring.BoatingWindowAssessment
 import com.wakewindow.app.domain.sun.SolarCalculator
+import com.wakewindow.app.domain.trip.SavedTrip
+import com.wakewindow.app.domain.trip.TripAssessment
 import com.wakewindow.app.domain.vessel.VesselProfile
+import com.wakewindow.app.ui.trip.TripDraft
+import com.wakewindow.app.ui.trip.TripWaypointTarget
 import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
@@ -35,6 +39,18 @@ data class WakeWindowUiState(
     val assessment: BoatingWindowAssessment? = null,
     val isLoadingAssessment: Boolean = false,
     val assessmentError: String? = null,
+
+    // --- Mode B: trip planning (Sprint 5) - see docs/TRIP_PLANNING.md ---
+    val savedTrips: List<SavedTrip> = emptyList(),
+    val savedTripsLoaded: Boolean = false,
+    val tripDraft: TripDraft = TripDraft(),
+    /** Set only while [com.wakewindow.app.ui.launchsearch.LaunchSearchScreen] is open for a
+     * trip waypoint rather than a Mode A launch - see [TripWaypointTarget]. Null the rest of
+     * the time, including whenever the same search screen is reused for Mode A. */
+    val tripSearchTarget: TripWaypointTarget? = null,
+    val tripAssessment: TripAssessment? = null,
+    val isLoadingTripAssessment: Boolean = false,
+    val tripAssessmentError: String? = null,
 ) {
     val hasAnySavedLaunch: Boolean get() = savedLaunches.isNotEmpty()
 

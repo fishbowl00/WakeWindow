@@ -4,8 +4,10 @@ import com.wakewindow.app.domain.model.GeoPoint
 import com.wakewindow.app.domain.route.RouteSample
 import com.wakewindow.app.domain.route.RouteSampleRole
 import com.wakewindow.app.domain.vessel.VesselProfile
+import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
+import java.util.UUID
 
 /**
  * A manually-defined point along a [MarineTripPlan] - explicitly a *planning* waypoint, never a
@@ -22,6 +24,11 @@ data class PlanningWaypoint(
     /** Set only when the user typed a specific expected arrival instead of letting
      * [MarineTripPlan.cruiseSpeedKts] estimate it - see [TripLegEstimator]. */
     val manualArrival: Instant? = null,
+    /** Stable identity for this waypoint, independent of [name]/[location] - needed once a
+     * [MarineTripPlan] is persisted (see [SavedTrip]) and for UI list operations (reorder,
+     * remove) that must survive a name edit. Defaults to a fresh random ID so existing
+     * call sites (tests, in-memory construction) need not supply one. */
+    val id: String = UUID.randomUUID().toString(),
 )
 
 /**
@@ -111,13 +118,25 @@ object TripLegEstimator {
     /** Total planning distance across every leg - see [TripLeg.planningDistanceNm]. */
     fun totalPlanningDistanceNm(plan: MarineTripPlan): Double = estimateLegs(plan).sumOf { it.planningDistanceNm }
 
+    /** The plan's own estimated arrival at its final point (the destination) - null only when
+     * the plan has no legs at all, which cannot happen for a valid [MarineTripPlan] (departure
+     * and destination are always present). */
+    fun estimatedArrival(plan: MarineTripPlan): Instant? = estimateLegs(plan).lastOrNull()?.estimatedArrival
+
+    /** Wall-clock span from [MarineTripPlan.departureTime] to [estimatedArrival] - zero when the
+     * trip is entirely unresolved (see [TripLeg.isResolved]), since an unresolved leg's arrival
+     * simply repeats the previous point's time rather than fabricating a duration. */
+    fun estimatedDuration(plan: MarineTripPlan): Duration {
+        val arrival = estimatedArrival(plan) ?: return Duration.ZERO
+        return Duration.between(plan.departureTime, arrival)
+    }
+
     /**
      * One [RouteSample] per planning point (departure, each waypoint, destination) at that
      * point's own location and estimated arrival time - ready to hand to a weather-evaluation
      * path the same way [com.wakewindow.app.domain.route.BoatingPlan.defaultRouteSamples]
-     * already is for Mode A. Wiring this into a real per-location forecast fetch (today's
-     * [com.wakewindow.app.data.repository.DefaultBoatingRepository] only ever samples one
-     * location) is a scoped follow-up, not attempted this sprint - see docs/TRIP_PLANNING.md.
+     * already is for Mode A. See [com.wakewindow.app.data.repository.DefaultTripBoatingRepository]
+     * for the per-location, per-arrival-time fetch this feeds - docs/TRIP_PLANNING.md.
      */
     fun routeSamples(plan: MarineTripPlan): List<RouteSample> {
         val legs = estimateLegs(plan)
@@ -131,5 +150,49 @@ object TripLegEstimator {
             samples += RouteSample(leg.to.location, role, progress, leg.estimatedArrival)
         }
         return samples
+    }
+}
+
+/** A specific reason a [MarineTripPlan] exceeds a documented complexity limit - see
+ * [TripPlanLimits]. Always a concrete, user-facing sentence, never a bare code. */
+data class TripPlanLimitViolation(val message: String)
+
+/**
+ * Deliberate, documented ceilings on trip complexity - see docs/TRIP_PLANNING.md "Trip
+ * complexity limits" for the rationale behind each number. These protect the app (and the
+ * providers WakeWindow calls on the user's behalf) from pathological input - an accidental
+ * 500-waypoint trip, or a plan spanning years - without arbitrarily blocking a real multi-day
+ * cruise. [validate] never mutates or rejects a [MarineTripPlan] itself; it only reports
+ * violations for a caller (the UI, [com.wakewindow.app.data.repository.DefaultTripBoatingRepository])
+ * to act on.
+ */
+object TripPlanLimits {
+    /** Departure + destination are unlimited (always exactly one each); this bounds only the
+     * manually-added intermediate stops. Ten manual waypoints plus the two endpoints is already
+     * far beyond any real single-day or multi-day recreational trip WakeWindow is designed for. */
+    const val MAX_WAYPOINTS = 10
+
+    /** Generated [WeatherSampleGenerator] samples per leg - see its own doc for the distance
+     * thresholds that decide how many of this ceiling are actually used for a given leg. */
+    const val MAX_WEATHER_SAMPLES_PER_LEG = 3
+
+    /** Beyond this, no marine forecast provider WakeWindow uses has any meaningful skill left -
+     * see docs/DATA_SOURCES.md forecast-horizon notes - so a plan this far out can still be
+     * created and saved, but its assessment is reported as [com.wakewindow.app.domain.trip.TripAssessment]
+     * with an honest unavailable/partial result rather than fabricated confidence. */
+    val MAX_FORECAST_HORIZON: Duration = Duration.ofDays(7)
+
+    /** A trip plan longer than this (departure to estimated final arrival) is rejected as
+     * pathological input rather than assessed - not a real recreational boating trip. */
+    val MAX_TRIP_DURATION: Duration = Duration.ofDays(14)
+
+    fun validate(plan: MarineTripPlan): List<TripPlanLimitViolation> = buildList {
+        if (plan.waypoints.size > MAX_WAYPOINTS) {
+            add(TripPlanLimitViolation("A trip supports at most $MAX_WAYPOINTS planning waypoints (this plan has ${plan.waypoints.size})"))
+        }
+        val duration = TripLegEstimator.estimatedDuration(plan)
+        if (duration > MAX_TRIP_DURATION) {
+            add(TripPlanLimitViolation("This plan's estimated duration (${duration.toDays()} days) exceeds the ${MAX_TRIP_DURATION.toDays()}-day trip limit"))
+        }
     }
 }

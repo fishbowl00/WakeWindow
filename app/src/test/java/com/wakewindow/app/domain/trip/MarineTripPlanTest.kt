@@ -139,4 +139,54 @@ class MarineTripPlanTest {
         val samples = TripLegEstimator.routeSamples(trip)
         assertEquals(2, samples.size)
     }
+
+    @Test
+    fun `each waypoint gets a stable auto-generated id that survives a name-only copy`() {
+        assertTrue(departure.id.isNotBlank())
+        val renamed = departure.copy(name = "Renamed")
+        assertEquals(departure.id, renamed.id)
+    }
+
+    @Test
+    fun `two independently-constructed waypoints never collide on id`() {
+        val a = PlanningWaypoint("A", GeoPoint(1.0, 1.0))
+        val b = PlanningWaypoint("A", GeoPoint(1.0, 1.0))
+        assertTrue(a.id != b.id)
+    }
+
+    @Test
+    fun `estimatedArrival and estimatedDuration reflect the final leg's own arrival`() {
+        val trip = plan(cruiseSpeedKts = 20.0)
+        val expectedArrival = TripLegEstimator.estimateLegs(trip).single().estimatedArrival
+        assertEquals(expectedArrival, TripLegEstimator.estimatedArrival(trip))
+        assertEquals(java.time.Duration.between(departureTime, expectedArrival), TripLegEstimator.estimatedDuration(trip))
+    }
+
+    @Test
+    fun `an unresolved trip (no speed, no manual arrival) has zero estimated duration, never a fabricated one`() {
+        val trip = plan(cruiseSpeedKts = null)
+        assertEquals(java.time.Duration.ZERO, TripLegEstimator.estimatedDuration(trip))
+    }
+
+    @Test
+    fun `TripPlanLimits flags a plan with too many waypoints`() {
+        val tooMany = (1..TripPlanLimits.MAX_WAYPOINTS + 1).map { PlanningWaypoint("WP$it", GeoPoint(27.5 + it * 0.01, -80.3)) }
+        val trip = plan(waypoints = tooMany, cruiseSpeedKts = 20.0)
+        val violations = TripPlanLimits.validate(trip)
+        assertTrue(violations.any { it.message.contains("waypoints") })
+    }
+
+    @Test
+    fun `TripPlanLimits flags a plan whose estimated duration exceeds the trip-length ceiling`() {
+        val farAway = PlanningWaypoint("Far", GeoPoint(-33.865, 151.209)) // Sydney - absurdly far from Port Canaveral
+        val trip = plan(cruiseSpeedKts = 20.0).copy(destination = farAway)
+        val violations = TripPlanLimits.validate(trip)
+        assertTrue(violations.any { it.message.contains("duration") })
+    }
+
+    @Test
+    fun `a well-formed short trip has no limit violations`() {
+        val trip = plan(cruiseSpeedKts = 20.0)
+        assertEquals(emptyList<TripPlanLimitViolation>(), TripPlanLimits.validate(trip))
+    }
 }

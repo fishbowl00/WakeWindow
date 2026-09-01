@@ -13,4 +13,8 @@ object WakeWindowDestinations {
     const val VESSEL = "vessel"
     const val SETTINGS = "settings"
     const val ABOUT = "about"
+
+    // Mode B: trip planning (Sprint 5) - see docs/TRIP_PLANNING.md.
+    const val TRIP_PLAN = "trip_plan"
+    const val TRIP_RESULT = "trip_result"
 }

@@ -16,6 +16,12 @@ enum class RouteSampleRole {
     WAYPOINT,
     DESTINATION,
     RETURN,
+    /** A generated intermediate sample along a long [com.wakewindow.app.domain.trip.TripLeg],
+     * used purely to evaluate weather partway between two user-supplied points - see
+     * [com.wakewindow.app.domain.trip.WeatherSampleGenerator]. Deliberately distinct from
+     * [WAYPOINT]: a weather sample is never a user-chosen planning point and must never be
+     * presented as one - see docs/TRIP_PLANNING.md "Weather samples vs. planning waypoints." */
+    WEATHER_SAMPLE,
 }
 
 data class RouteSample(
